@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -72,13 +73,54 @@ def _is_hook_installed(settings: dict) -> bool:
             if not isinstance(h, dict):
                 continue
             cmd = h.get("command", "")
-            # Match 'ccbot hook' or paths ending with 'ccbot hook'
-            if cmd == _HOOK_COMMAND_SUFFIX or cmd.endswith("/" + _HOOK_COMMAND_SUFFIX):
+            # Match 'ccbot hook', paths ending with 'ccbot hook', or remote hooks
+            if (
+                cmd == _HOOK_COMMAND_SUFFIX
+                or cmd.endswith("/" + _HOOK_COMMAND_SUFFIX)
+                or "--remote" in cmd
+            ):
                 return True
     return False
 
 
-def _install_hook() -> int:
+def _uninstall_hook() -> int:
+    """Remove the ccbot hook from Claude's settings.json. Returns 0 on success, 1 on error."""
+    settings_file = _CLAUDE_SETTINGS_FILE
+    if not settings_file.exists():
+        print("No settings.json found — nothing to uninstall")
+        return 0
+    try:
+        settings = json.loads(settings_file.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Error reading {settings_file}: {e}", file=sys.stderr)
+        return 1
+
+    hooks = settings.get("hooks", {})
+    session_start = hooks.get("SessionStart", [])
+    # Remove any entry that contains a ccbot hook command
+    new_entries = [
+        entry
+        for entry in session_start
+        if not any(
+            (
+                _HOOK_COMMAND_SUFFIX in h.get("command", "")
+                or "ccbot hook" in h.get("command", "")
+            )
+            for h in entry.get("hooks", [])
+            if isinstance(h, dict)
+        )
+    ]
+    settings["hooks"]["SessionStart"] = new_entries
+    try:
+        settings_file.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"Error writing {settings_file}: {e}", file=sys.stderr)
+        return 1
+    print(f"Hook uninstalled from {settings_file}")
+    return 0
+
+
+def _install_hook(remote_url: str | None = None, machine_id: str | None = None) -> int:
     """Install the ccbot hook into Claude's settings.json.
 
     Returns 0 on success, 1 on error.
@@ -104,7 +146,13 @@ def _install_hook() -> int:
 
     # Find the full path to ccbot
     ccbot_path = _find_ccbot_path()
-    hook_command = f"{ccbot_path} hook"
+    if remote_url:
+        mid = machine_id or ""
+        hook_command = f"{ccbot_path} hook --remote {remote_url}" + (
+            f" --machine-id {mid}" if mid else ""
+        )
+    else:
+        hook_command = f"{ccbot_path} hook"
     hook_config = {"type": "command", "command": hook_command, "timeout": 5}
     logger.info("Installing hook command: %s", hook_command)
 
@@ -131,6 +179,23 @@ def _install_hook() -> int:
     return 0
 
 
+def _post_hook_remote(payload: dict, url: str) -> None:
+    """POST hook payload to remote bot endpoint via urllib (no extra deps)."""
+    import urllib.request as _req
+
+    data = json.dumps(payload).encode()
+    request = _req.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        resp = _req.urlopen(request, timeout=5)
+        logger.info("Remote hook POST to %s: status=%d", url, resp.status)
+    except Exception as e:
+        logger.error("Remote hook POST failed to %s: %s", url, e)
+
+
 def hook_main() -> None:
     """Process a Claude Code hook event from stdin, or install the hook."""
     # Configure logging for the hook subprocess (main.py logging doesn't apply here)
@@ -149,12 +214,32 @@ def hook_main() -> None:
         action="store_true",
         help="Install the hook into ~/.claude/settings.json",
     )
+    parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove the hook from ~/.claude/settings.json",
+    )
+    parser.add_argument(
+        "--remote",
+        metavar="URL",
+        default=None,
+        help="POST hook to this URL instead of writing local session_map.json",
+    )
+    parser.add_argument(
+        "--machine-id",
+        metavar="ID",
+        default="",
+        help="Machine ID to report in hook payload (for --remote)",
+    )
     # Parse only known args to avoid conflicts with stdin JSON
     args, _ = parser.parse_known_args(sys.argv[2:])
 
+    if args.uninstall:
+        logger.info("Hook uninstall requested")
+        sys.exit(_uninstall_hook())
     if args.install:
         logger.info("Hook install requested")
-        sys.exit(_install_hook())
+        sys.exit(_install_hook(remote_url=args.remote, machine_id=args.machine_id or None))
 
     # Normal hook processing: read JSON from stdin
     logger.debug("Processing hook event from stdin")
@@ -226,6 +311,22 @@ def hook_main() -> None:
         session_id,
         cwd,
     )
+
+    # If --remote, POST payload to the remote bot and return
+    if args.remote:
+        machine_id_value = args.machine_id or socket.gethostname().split(".")[0]
+        _post_hook_remote(
+            {
+                "session_id": session_id,
+                "cwd": cwd,
+                "hook_event_name": event,
+                "window_id": window_id,
+                "window_name": window_name,
+                "machine_id": machine_id_value,
+            },
+            args.remote,
+        )
+        return
 
     # Read-modify-write with file locking to prevent concurrent hook races
     from .utils import ccbot_dir

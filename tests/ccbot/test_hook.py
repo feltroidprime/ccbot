@@ -144,3 +144,46 @@ class TestHookMainValidation:
             },
         )
         assert not (tmp_path / "session_map.json").exists()
+
+
+def test_hook_uninstall_removes_hook(tmp_path, monkeypatch):
+    """--uninstall removes the ccbot hook from settings.json."""
+    settings = {
+        "hooks": {
+            "SessionStart": [{"hooks": [{"type": "command", "command": "ccbot hook", "timeout": 5}]}]
+        }
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", settings_file)
+    from ccbot.hook import _uninstall_hook
+    result = _uninstall_hook()
+    assert result == 0
+    updated = json.loads(settings_file.read_text())
+    session_start = updated.get("hooks", {}).get("SessionStart", [])
+    for entry in session_start:
+        for h in entry.get("hooks", []):
+            assert "ccbot hook" not in h.get("command", "")
+
+
+def test_hook_uninstall_no_settings_returns_0(tmp_path, monkeypatch):
+    monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", tmp_path / "nonexistent.json")
+    from ccbot.hook import _uninstall_hook
+    assert _uninstall_hook() == 0
+
+
+def test_hook_install_with_remote_url(tmp_path, monkeypatch):
+    """--install --remote writes remote URL to hook command."""
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", settings_file)
+    from ccbot.hook import _install_hook
+    result = _install_hook(remote_url="http://macbook:8080/hook", machine_id="fedora")
+    assert result == 0
+    settings = json.loads(settings_file.read_text())
+    cmds = [
+        h["command"]
+        for e in settings["hooks"]["SessionStart"]
+        for h in e["hooks"]
+        if isinstance(h, dict)
+    ]
+    assert any("--remote" in c and "http://macbook:8080/hook" in c for c in cmds)
