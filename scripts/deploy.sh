@@ -105,9 +105,12 @@ else
     red "✗"
 fi
 
-# Upgrade all online peers
+# Upgrade all online peers (skip self, bot host handled separately, skip phones)
 while IFS=' ' read -r hostname ip role; do
     [ "$role" = "self" ] && continue
+    [ "$hostname" = "$BOT_HOST" ] && continue
+    # Skip devices unlikely to have SSH (phones, tablets)
+    case "$hostname" in iphone*|ipad*|pixel*|android*) continue;; esac
     printf "    %-20s " "$hostname"
     if ssh_cmd "${SSH_USER}@${hostname}" "bash -lc 'uv tool upgrade ccbot'" >/dev/null 2>&1; then
         green "✓"
@@ -115,6 +118,16 @@ while IFS=' ' read -r hostname ip role; do
         red "✗"
     fi
 done < <(get_tailscale_machines)
+
+# Ensure bot host is upgraded (in case it was skipped or timed out above)
+if [ "$BOT_HOST" != "$self_host" ]; then
+    printf "    %-20s " "$BOT_HOST (bot)"
+    if ssh_cmd "${SSH_USER}@${BOT_HOST}" "bash -lc 'uv tool upgrade ccbot'" >/dev/null 2>&1; then
+        green "✓"
+    else
+        red "✗"
+    fi
+fi
 
 # --- Step 3: Restart bot ---
 bold "==> Restarting bot"
