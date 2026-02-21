@@ -204,8 +204,8 @@ class RemoteMachine:
     async def list_dir(self, path: str) -> list[str]:
         """Return sorted non-hidden subdirectory names; [] on error."""
         cmd = (
-            f"find {path!r} -maxdepth 1 -mindepth 1 -type d -not -name '.*'"
-            f" -printf '%f\\n' 2>/dev/null | sort"
+            f"find {path!r} -maxdepth 1 -mindepth 1 -type d ! -name '.*'"
+            " -exec basename {} \\; 2>/dev/null | sort"
         )
         try:
             result = await self._run(cmd)
@@ -230,7 +230,7 @@ class RemoteMachine:
 
     async def file_size(self, path: str) -> int | None:
         """Return file size in bytes, or None if missing."""
-        cmd = f"stat -c %s {path!r} 2>/dev/null"
+        cmd = f"stat -c %s {path!r} 2>/dev/null || stat -f %z {path!r} 2>/dev/null"
         try:
             result = await self._run(cmd)
             stdout: str = result.stdout  # type: ignore[union-attr]
