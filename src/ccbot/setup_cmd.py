@@ -106,9 +106,12 @@ def _ssh_check(user: str, host: str) -> bool:
 def _ssh_run(
     user: str, host: str, cmd: str, timeout: int = 30
 ) -> subprocess.CompletedProcess[str]:
-    """Run a command on a remote machine via SSH login shell (ensures PATH is set)."""
+    """Run a command on a remote machine via SSH interactive login shell.
+
+    Uses bash -lic to ensure .bashrc is sourced (needed for keychain/ssh-agent).
+    """
     return subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", f"{user}@{host}", f"bash -lc {cmd!r}"],
+        ["ssh", "-o", "BatchMode=yes", f"{user}@{host}", f"bash -lic {cmd!r}"],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -361,4 +364,3 @@ def _provision_machines(
         print(
             "\nSome machines failed. Re-run with --machine <hostname> to retry individual machines."
         )
-    sys.exit(0 if all_ok else 1)
