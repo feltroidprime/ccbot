@@ -115,13 +115,21 @@ def _ssh_run(
     )
 
 
-def _uv_upgrade_remote(user: str, host: str) -> bool:
-    """Upgrade (or install) ccbot on a remote machine. Always pulls latest main."""
-    cmd = f"uv tool upgrade ccbot 2>&1 || uv tool install 'ccbot @ git+{GITHUB_REPO}' 2>&1"
+def _uv_upgrade_remote(user: str, host: str) -> tuple[bool, str]:
+    """Upgrade (or install) ccbot on a remote machine. Always pulls latest main.
+
+    Returns (success, stderr_on_failure).
+    """
+    cmd = (
+        "uv tool upgrade ccbot 2>&1"
+        f" || uv tool install --python 3.12 'ccbot @ git+{GITHUB_REPO}' 2>&1"
+    )
     try:
-        return _ssh_run(user, host, cmd, timeout=120).returncode == 0
-    except Exception:
-        return False
+        result = _ssh_run(user, host, cmd, timeout=120)
+        output = (result.stdout or "") + (result.stderr or "")
+        return (result.returncode == 0, output.strip())
+    except Exception as e:
+        return (False, str(e))
 
 
 def _install_hook_remote(
@@ -294,11 +302,14 @@ def setup_main(target_machine: str | None = None) -> None:
 
         # ccbot: always upgrade to latest main
         print("  ccbot ............ ", end="", flush=True)
-        if _uv_upgrade_remote(user, host):
+        ok, output = _uv_upgrade_remote(user, host)
+        if ok:
             print("✓ (upgraded)")
         else:
             r.success = False
-            r.errors.append("Upgrade failed — run on remote: uv tool upgrade ccbot")
+            # Show last meaningful line of error output
+            last_line = output.splitlines()[-1] if output else "unknown error"
+            r.errors.append(f"Upgrade failed: {last_line}")
             print("✗")
 
         # Hook
