@@ -3,7 +3,7 @@
 import json
 from ccbot.setup_cmd import (
     _load_existing_machines,
-    _detect_github_url,
+    GITHUB_REPO,
     MachineSetupResult,
     HOOK_DEFAULT_PORT,
 )
@@ -43,7 +43,6 @@ def test_machine_setup_result_failure_with_errors():
     assert "SSH failed" in r.errors
 
 
-def test_detect_github_url_returns_string():
-    # Just verify it returns a string (may be empty in test env)
-    result = _detect_github_url()
-    assert isinstance(result, str)
+def test_github_repo_is_string():
+    assert isinstance(GITHUB_REPO, str)
+    assert GITHUB_REPO.startswith("https://github.com/")

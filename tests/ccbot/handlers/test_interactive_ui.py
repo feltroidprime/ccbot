@@ -52,13 +52,17 @@ class TestHandleInteractiveUI:
         mock_window = MagicMock()
         mock_window.window_id = window_id
 
+        mock_machine = AsyncMock()
+        mock_machine.find_window_by_id = AsyncMock(return_value=mock_window)
+        mock_machine.capture_pane = AsyncMock(return_value=sample_pane_settings)
+
         with (
-            patch("ccbot.handlers.interactive_ui.tmux_manager") as mock_tmux,
+            patch("ccbot.handlers.interactive_ui.machine_registry") as mock_reg,
             patch("ccbot.handlers.interactive_ui.session_manager") as mock_sm,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_settings)
+            mock_reg.get.return_value = mock_machine
             mock_sm.resolve_chat_id.return_value = 100
+            mock_sm.get_binding_for_thread.return_value = None
 
             result = await handle_interactive_ui(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
@@ -78,12 +82,16 @@ class TestHandleInteractiveUI:
         mock_window = MagicMock()
         mock_window.window_id = window_id
 
+        mock_machine = AsyncMock()
+        mock_machine.find_window_by_id = AsyncMock(return_value=mock_window)
+        mock_machine.capture_pane = AsyncMock(return_value="$ echo hello\nhello\n$\n")
+
         with (
-            patch("ccbot.handlers.interactive_ui.tmux_manager") as mock_tmux,
-            patch("ccbot.handlers.interactive_ui.session_manager"),
+            patch("ccbot.handlers.interactive_ui.machine_registry") as mock_reg,
+            patch("ccbot.handlers.interactive_ui.session_manager") as mock_sm,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value="$ echo hello\nhello\n$\n")
+            mock_reg.get.return_value = mock_machine
+            mock_sm.get_binding_for_thread.return_value = None
 
             result = await handle_interactive_ui(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42

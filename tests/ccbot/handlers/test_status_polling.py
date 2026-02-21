@@ -50,15 +50,20 @@ class TestStatusPollerSettingsDetection:
         mock_window = MagicMock()
         mock_window.window_id = window_id
 
+        mock_machine = AsyncMock()
+        mock_machine.find_window_by_id = AsyncMock(return_value=mock_window)
+        mock_machine.capture_pane = AsyncMock(return_value=sample_pane_settings)
+
         with (
-            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch("ccbot.handlers.status_polling.machine_registry") as mock_reg,
+            patch("ccbot.handlers.status_polling.session_manager") as mock_sm,
             patch(
                 "ccbot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
             ) as mock_handle_ui,
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_settings)
+            mock_reg.get.return_value = mock_machine
+            mock_sm.get_binding_for_thread.return_value = None
             mock_handle_ui.return_value = True
 
             await update_status_message(
@@ -82,8 +87,13 @@ class TestStatusPollerSettingsDetection:
             "  [Opus 4.6] Context: 50%\n"
         )
 
+        mock_machine = AsyncMock()
+        mock_machine.find_window_by_id = AsyncMock(return_value=mock_window)
+        mock_machine.capture_pane = AsyncMock(return_value=normal_pane)
+
         with (
-            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch("ccbot.handlers.status_polling.machine_registry") as mock_reg,
+            patch("ccbot.handlers.status_polling.session_manager") as mock_sm,
             patch(
                 "ccbot.handlers.status_polling.handle_interactive_ui",
                 new_callable=AsyncMock,
@@ -93,8 +103,8 @@ class TestStatusPollerSettingsDetection:
                 new_callable=AsyncMock,
             ),
         ):
-            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux.capture_pane = AsyncMock(return_value=normal_pane)
+            mock_reg.get.return_value = mock_machine
+            mock_sm.get_binding_for_thread.return_value = None
 
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42
@@ -115,16 +125,21 @@ class TestStatusPollerSettingsDetection:
         mock_window = MagicMock()
         mock_window.window_id = window_id
 
+        mock_machine = AsyncMock()
+        mock_machine.find_window_by_id = AsyncMock(return_value=mock_window)
+        mock_machine.capture_pane = AsyncMock(return_value=sample_pane_settings)
+
         with (
-            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux_poll,
-            patch("ccbot.handlers.interactive_ui.tmux_manager") as mock_tmux_ui,
-            patch("ccbot.handlers.interactive_ui.session_manager") as mock_sm,
+            patch("ccbot.handlers.status_polling.machine_registry") as mock_reg_poll,
+            patch("ccbot.handlers.status_polling.session_manager") as mock_sm_poll,
+            patch("ccbot.handlers.interactive_ui.machine_registry") as mock_reg_ui,
+            patch("ccbot.handlers.interactive_ui.session_manager") as mock_sm_ui,
         ):
-            mock_tmux_poll.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux_poll.capture_pane = AsyncMock(return_value=sample_pane_settings)
-            mock_tmux_ui.find_window_by_id = AsyncMock(return_value=mock_window)
-            mock_tmux_ui.capture_pane = AsyncMock(return_value=sample_pane_settings)
-            mock_sm.resolve_chat_id.return_value = 100
+            mock_reg_poll.get.return_value = mock_machine
+            mock_sm_poll.get_binding_for_thread.return_value = None
+            mock_reg_ui.get.return_value = mock_machine
+            mock_sm_ui.resolve_chat_id.return_value = 100
+            mock_sm_ui.get_binding_for_thread.return_value = None
 
             await update_status_message(
                 mock_bot, user_id=1, window_id=window_id, thread_id=42

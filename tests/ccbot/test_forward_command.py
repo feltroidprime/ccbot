@@ -36,23 +36,30 @@ class TestForwardCommand:
         update = _make_update("/model")
         context = _make_context()
 
+        mock_machine = AsyncMock()
+        mock_machine.find_window_by_id = AsyncMock(return_value=MagicMock())
+
         with (
             patch("ccbot.bot.is_user_allowed", return_value=True),
             patch("ccbot.bot._get_thread_id", return_value=42),
             patch("ccbot.bot.session_manager") as mock_sm,
-            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.machine_registry") as mock_registry,
             patch("ccbot.bot.safe_reply", new_callable=AsyncMock),
         ):
-            mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_registry.get.return_value = mock_machine
+            mock_sm.get_binding_for_thread.return_value = MagicMock(
+                window_id="@5", machine="local"
+            )
             mock_sm.get_display_name.return_value = "project"
-            mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
 
             from ccbot.bot import forward_command_handler
 
             await forward_command_handler(update, context)
 
-            mock_sm.send_to_window.assert_called_once_with("@5", "/model")
+            mock_sm.send_to_window.assert_called_once_with(
+                "@5", "/model", machine_id="local"
+            )
 
     @pytest.mark.asyncio
     async def test_cost_sends_command_to_tmux(self):
@@ -60,23 +67,30 @@ class TestForwardCommand:
         update = _make_update("/cost")
         context = _make_context()
 
+        mock_machine = AsyncMock()
+        mock_machine.find_window_by_id = AsyncMock(return_value=MagicMock())
+
         with (
             patch("ccbot.bot.is_user_allowed", return_value=True),
             patch("ccbot.bot._get_thread_id", return_value=42),
             patch("ccbot.bot.session_manager") as mock_sm,
-            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.machine_registry") as mock_registry,
             patch("ccbot.bot.safe_reply", new_callable=AsyncMock),
         ):
-            mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_registry.get.return_value = mock_machine
+            mock_sm.get_binding_for_thread.return_value = MagicMock(
+                window_id="@5", machine="local"
+            )
             mock_sm.get_display_name.return_value = "project"
-            mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
 
             from ccbot.bot import forward_command_handler
 
             await forward_command_handler(update, context)
 
-            mock_sm.send_to_window.assert_called_once_with("@5", "/cost")
+            mock_sm.send_to_window.assert_called_once_with(
+                "@5", "/cost", machine_id="local"
+            )
 
     @pytest.mark.asyncio
     async def test_clear_clears_session(self):
@@ -84,21 +98,28 @@ class TestForwardCommand:
         update = _make_update("/clear")
         context = _make_context()
 
+        mock_machine = AsyncMock()
+        mock_machine.find_window_by_id = AsyncMock(return_value=MagicMock())
+
         with (
             patch("ccbot.bot.is_user_allowed", return_value=True),
             patch("ccbot.bot._get_thread_id", return_value=42),
             patch("ccbot.bot.session_manager") as mock_sm,
-            patch("ccbot.bot.tmux_manager") as mock_tmux,
+            patch("ccbot.bot.machine_registry") as mock_registry,
             patch("ccbot.bot.safe_reply", new_callable=AsyncMock),
         ):
-            mock_sm.resolve_window_for_thread.return_value = "@5"
+            mock_registry.get.return_value = mock_machine
+            mock_sm.get_binding_for_thread.return_value = MagicMock(
+                window_id="@5", machine="local"
+            )
             mock_sm.get_display_name.return_value = "project"
-            mock_tmux.find_window_by_id = AsyncMock(return_value=MagicMock())
             mock_sm.send_to_window = AsyncMock(return_value=(True, "ok"))
 
             from ccbot.bot import forward_command_handler
 
             await forward_command_handler(update, context)
 
-            mock_sm.send_to_window.assert_called_once_with("@5", "/clear")
+            mock_sm.send_to_window.assert_called_once_with(
+                "@5", "/clear", machine_id="local"
+            )
             mock_sm.clear_window_session.assert_called_once_with("@5")
