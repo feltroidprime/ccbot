@@ -81,6 +81,10 @@ class MachineConnection(Protocol):
         """Kill a tmux window by ID; return True on success."""
         ...
 
+    async def get_home_dir(self) -> str:
+        """Return the home directory path on this machine."""
+        ...
+
 
 class LocalMachine:
     """MachineConnection implementation for the local machine."""
@@ -156,6 +160,10 @@ class LocalMachine:
     async def kill_window(self, window_id: str) -> bool:
         """Kill a tmux window via the local tmux_manager."""
         return await tmux_manager.kill_window(window_id)
+
+    async def get_home_dir(self) -> str:
+        """Return the local home directory."""
+        return str(Path.home())
 
 
 class RemoteMachine:
@@ -349,6 +357,16 @@ class RemoteMachine:
                 "kill_window failed for window %s on %s", window_id, self._host
             )
             return False
+
+    async def get_home_dir(self) -> str:
+        """Return the remote user's home directory via SSH."""
+        try:
+            result = await self._run("echo $HOME")
+            stdout: str = result.stdout  # type: ignore[union-attr]
+            home = stdout.strip()
+            return home if home else f"/home/{self._user}"
+        except Exception:
+            return f"/home/{self._user}"
 
 
 class MachineRegistry:

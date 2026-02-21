@@ -23,9 +23,9 @@ import time
 from telegram import Bot
 from telegram.error import BadRequest
 
+from ..machines import machine_registry
 from ..session import session_manager
 from ..terminal_parser import is_interactive_ui, parse_status_line
-from ..tmux_manager import tmux_manager
 from .interactive_ui import (
     clear_interactive_msg,
     get_interactive_window,
@@ -54,13 +54,20 @@ async def update_status_message(
     Also detects permission prompt UIs (not triggered via JSONL) and enters
     interactive mode when found.
     """
-    w = await tmux_manager.find_window_by_id(window_id)
+    binding = (
+        session_manager.get_binding_for_thread(user_id, thread_id)
+        if thread_id
+        else None
+    )
+    machine = machine_registry.get(binding.machine if binding else "local")
+
+    w = await machine.find_window_by_id(window_id)
     if not w:
         # Window gone, enqueue clear
         await enqueue_status_update(bot, user_id, window_id, None, thread_id=thread_id)
         return
 
-    pane_text = await tmux_manager.capture_pane(w.window_id)
+    pane_text = await machine.capture_pane(w.window_id)
     if not pane_text:
         # Transient capture failure - keep existing status message
         return
@@ -115,6 +122,7 @@ async def status_poll_loop(bot: Bot) -> None:
                     session_manager.iter_thread_bindings()
                 ):
                     wid = binding.window_id
+                    machine = machine_registry.get(binding.machine)
                     try:
                         await bot.unpin_all_forum_topic_messages(
                             chat_id=session_manager.resolve_chat_id(user_id, thread_id),
@@ -123,9 +131,9 @@ async def status_poll_loop(bot: Bot) -> None:
                     except BadRequest as e:
                         if "Topic_id_invalid" in str(e):
                             # Topic deleted — kill window, unbind, and clean up state
-                            w = await tmux_manager.find_window_by_id(wid)
+                            w = await machine.find_window_by_id(wid)
                             if w:
-                                await tmux_manager.kill_window(w.window_id)
+                                await machine.kill_window(w.window_id)
                             session_manager.unbind_thread(user_id, thread_id)
                             await clear_topic_state(user_id, thread_id, bot)
                             logger.info(
@@ -152,9 +160,10 @@ async def status_poll_loop(bot: Bot) -> None:
                 session_manager.iter_thread_bindings()
             ):
                 wid = binding.window_id
+                machine = machine_registry.get(binding.machine)
                 try:
                     # Clean up stale bindings (window no longer exists)
-                    w = await tmux_manager.find_window_by_id(wid)
+                    w = await machine.find_window_by_id(wid)
                     if not w:
                         session_manager.unbind_thread(user_id, thread_id)
                         await clear_topic_state(user_id, thread_id, bot)

@@ -31,7 +31,6 @@ from ..markdown_v2 import convert_markdown
 from ..session import session_manager
 from ..transcript_parser import TranscriptParser
 from ..terminal_parser import parse_status_line
-from ..tmux_manager import tmux_manager
 from .message_sender import NO_LINK_PREVIEW, send_photo, send_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -568,15 +567,23 @@ async def _check_and_send_status(
     thread_id: int | None = None,
 ) -> None:
     """Check terminal for status line and send status message if present."""
+    from ..machines import machine_registry
+
     # Skip if there are more messages pending in the queue
     queue = _message_queues.get(user_id)
     if queue and not queue.empty():
         return
-    w = await tmux_manager.find_window_by_id(window_id)
+    binding = (
+        session_manager.get_binding_for_thread(user_id, thread_id)
+        if thread_id
+        else None
+    )
+    machine = machine_registry.get(binding.machine if binding else "local")
+    w = await machine.find_window_by_id(window_id)
     if not w:
         return
 
-    pane_text = await tmux_manager.capture_pane(w.window_id)
+    pane_text = await machine.capture_pane(w.window_id)
     if not pane_text:
         return
 
