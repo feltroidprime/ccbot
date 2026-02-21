@@ -152,11 +152,12 @@ def _install_hook_local() -> bool:
         return False
 
 
-def setup_main(target_machine: str | None = None) -> None:
-    """Run the ccbot setup TUI.
+def setup_main(target_machine: str | None = None, headless: bool = False) -> None:
+    """Run the ccbot setup TUI, or headless upgrade using existing machines.json.
 
     Args:
         target_machine: If set, skip TUI and target this single machine hostname.
+        headless: If True, skip TUI entirely and use existing machines.json as-is.
     """
     config_dir = ccbot_dir()
     machines_file = config_dir / "machines.json"
@@ -165,6 +166,17 @@ def setup_main(target_machine: str | None = None) -> None:
 
     local_hostname = _get_tailscale_self_hostname()
     hook_port = existing.get("hook_port", HOOK_DEFAULT_PORT)
+
+    # --- Headless mode: skip TUI, use existing config ---
+    if headless:
+        if not existing_machines:
+            print("No machines.json found. Run `ccbot setup` interactively first.")
+            sys.exit(1)
+        machines_config = existing_machines
+        # Skip to provisioning
+        print(f"Using existing {machines_file}\n")
+        _provision_machines(machines_config, local_hostname, hook_port)
+        return
 
     # --- Machine selection ---
     if target_machine:
@@ -252,7 +264,15 @@ def setup_main(target_machine: str | None = None) -> None:
     atomic_write_json(machines_file, new_config)
     print(f"\nWrote {machines_file}\n")
 
-    # --- Per-machine provisioning (idempotent: check before act) ---
+    _provision_machines(machines_config, local_hostname, hook_port)
+
+
+def _provision_machines(
+    machines_config: dict[str, dict[str, str]],
+    local_hostname: str,
+    hook_port: int,
+) -> None:
+    """Provision all machines: upgrade ccbot, install hooks. Idempotent."""
     hook_url_base = f"http://{local_hostname}:{hook_port}" if local_hostname else ""
     results: list[MachineSetupResult] = []
 
@@ -286,8 +306,10 @@ def setup_main(target_machine: str | None = None) -> None:
             results.append(r)
             continue
 
-        host = cfg["host"]
-        user = cfg["user"]
+        host = cfg.get("host", "")
+        user = cfg.get("user", "")
+        if not host or not user:
+            continue
         r = MachineSetupResult(machine_id=machine_id, success=True)
 
         # SSH
@@ -307,7 +329,6 @@ def setup_main(target_machine: str | None = None) -> None:
             print("✓ (upgraded)")
         else:
             r.success = False
-            # Show last meaningful line of error output
             last_line = output.splitlines()[-1] if output else "unknown error"
             r.errors.append(f"Upgrade failed: {last_line}")
             print("✗")

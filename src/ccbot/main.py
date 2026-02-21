@@ -30,10 +30,15 @@ def main() -> None:
             metavar="HOSTNAME",
             help="Target a single machine by hostname (skips TUI)",
         )
+        p.add_argument(
+            "--headless",
+            action="store_true",
+            help="Skip TUI, use existing machines.json (for deploy scripts)",
+        )
         args = p.parse_args(sys.argv[2:])
         from .setup_cmd import setup_main
 
-        setup_main(target_machine=args.machine)
+        setup_main(target_machine=args.machine, headless=args.headless)
         return
 
     logging.basicConfig(
