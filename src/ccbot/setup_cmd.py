@@ -103,14 +103,23 @@ def _ssh_check(user: str, host: str) -> bool:
         return False
 
 
+def _ssh_run(
+    user: str, host: str, cmd: str, timeout: int = 30
+) -> subprocess.CompletedProcess[str]:
+    """Run a command on a remote machine via SSH login shell (ensures PATH is set)."""
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", f"{user}@{host}", f"bash -lc {cmd!r}"],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
 def _uv_upgrade_remote(user: str, host: str) -> bool:
     """Upgrade (or install) ccbot on a remote machine. Always pulls latest main."""
     cmd = f"uv tool upgrade ccbot 2>&1 || uv tool install 'ccbot @ git+{GITHUB_REPO}' 2>&1"
     try:
-        result = subprocess.run(
-            ["ssh", f"{user}@{host}", cmd], capture_output=True, text=True, timeout=120
-        )
-        return result.returncode == 0
+        return _ssh_run(user, host, cmd, timeout=120).returncode == 0
     except Exception:
         return False
 
@@ -120,21 +129,16 @@ def _install_hook_remote(
 ) -> bool:
     cmd = f"ccbot hook --install --remote {remote_url} --machine-id {machine_id}"
     try:
-        result = subprocess.run(
-            ["ssh", f"{user}@{host}", cmd], capture_output=True, text=True, timeout=15
-        )
-        return result.returncode == 0
+        return _ssh_run(user, host, cmd, timeout=15).returncode == 0
     except Exception:
         return False
 
 
 def _check_endpoint_reachable(user: str, host: str, health_url: str) -> bool:
-    cmd = f"curl -sf {health_url}"
     try:
-        result = subprocess.run(
-            ["ssh", f"{user}@{host}", cmd], capture_output=True, text=True, timeout=10
+        return (
+            _ssh_run(user, host, f"curl -sf {health_url}", timeout=10).returncode == 0
         )
-        return result.returncode == 0
     except Exception:
         return False
 
