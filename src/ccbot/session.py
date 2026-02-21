@@ -193,26 +193,19 @@ class SessionManager:
                 }
 
                 # Detect old format: keys that don't look like window IDs
-                needs_migration = False
-                for k in self.window_states:
-                    if not self._is_window_id(k):
-                        needs_migration = True
-                        break
-                if not needs_migration:
-                    for bindings in self.thread_bindings.values():
-                        for b in bindings.values():
-                            if not self._is_window_id(b.window_id):
-                                needs_migration = True
-                                break
-                        if needs_migration:
-                            break
+                needs_migration = any(
+                    not self._is_window_id(k) for k in self.window_states
+                ) or any(
+                    not self._is_window_id(b.window_id)
+                    for bindings in self.thread_bindings.values()
+                    for b in bindings.values()
+                )
 
                 if needs_migration:
                     logger.info(
                         "Detected old-format state (window_name keys), "
                         "will re-resolve on startup"
                     )
-                    pass
 
             except (json.JSONDecodeError, ValueError) as e:
                 logger.warning("Failed to load state: %s", e)
@@ -221,7 +214,6 @@ class SessionManager:
                 self.thread_bindings = {}
                 self.window_display_names = {}
                 self.group_chat_ids = {}
-                pass
 
     async def resolve_stale_ids(self) -> None:
         """Re-resolve persisted window IDs against live tmux windows on all machines.

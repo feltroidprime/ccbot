@@ -71,6 +71,9 @@ _ANSI_COLORS: dict[int, tuple[int, int, int]] = {
 _DEFAULT_FG = (212, 212, 212)  # Light gray
 _DEFAULT_BG = (30, 30, 30)  # Dark gray
 
+# ANSI escape sequence pattern (compiled once at module level)
+_ANSI_PATTERN = re.compile(r"\x1b\[([0-9;]*)m")
+
 
 @dataclass
 class TextStyle:
@@ -123,14 +126,11 @@ def _font_tier(ch: str) -> int:
 
 def _parse_ansi_line(line: str) -> list[StyledSegment]:
     """Parse a line with ANSI escape codes into styled segments."""
-    # ANSI escape sequence pattern
-    ansi_pattern = re.compile(r"\x1b\[([0-9;]*)m")
-
     segments: list[StyledSegment] = []
     current_style = TextStyle()
     pos = 0
 
-    for match in ansi_pattern.finditer(line):
+    for match in _ANSI_PATTERN.finditer(line):
         # Add text before this escape code
         text_before = line[pos : match.start()]
         if text_before:
@@ -223,7 +223,7 @@ def _approximate_256_color(idx: int) -> tuple[int, int, int]:
     """Approximate a 256-color palette index to RGB."""
     if idx < 16:
         return _ANSI_COLORS[idx]
-    elif idx < 232:
+    if idx < 232:
         # 216 color cube: 16 + 36*r + 6*g + b
         idx -= 16
         r = (idx // 36) * 51

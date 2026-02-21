@@ -35,37 +35,39 @@ class MachineSetupResult:
     errors: list[str] = field(default_factory=list)
 
 
-def _get_tailscale_peers() -> list[dict]:  # type: ignore[type-arg]
-    """Run tailscale status --json and return list of peer dicts (includes self with _is_self=True)."""
+def _tailscale_status() -> dict | None:
+    """Run tailscale status --json and return parsed dict, or None on failure."""
     try:
         result = subprocess.run(
             ["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5
         )
         if result.returncode != 0:
-            return []
-        data = json.loads(result.stdout)
-        peers = list(data.get("Peer", {}).values())
-        self_node = data.get("Self", {})
-        if self_node:
-            self_node = dict(self_node)
-            self_node["_is_self"] = True
-            peers.insert(0, self_node)
-        return peers
+            return None
+        return json.loads(result.stdout)
     except Exception as e:
         logger.warning("Could not query Tailscale: %s", e)
+        return None
+
+
+def _get_tailscale_peers() -> list[dict]:  # type: ignore[type-arg]
+    """Return list of peer dicts (includes self with _is_self=True)."""
+    data = _tailscale_status()
+    if not data:
         return []
+    peers = list(data.get("Peer", {}).values())
+    self_node = data.get("Self", {})
+    if self_node:
+        self_node["_is_self"] = True
+        peers.insert(0, self_node)
+    return peers
 
 
 def _get_tailscale_self_hostname() -> str:
     """Return the local machine's Tailscale MagicDNS hostname (without trailing dot)."""
-    try:
-        result = subprocess.run(
-            ["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5
-        )
-        data = json.loads(result.stdout)
+    data = _tailscale_status()
+    if data:
         return data.get("Self", {}).get("DNSName", "").rstrip(".")
-    except Exception:
-        return socket.gethostname()
+    return socket.gethostname()
 
 
 def _detect_github_url() -> str:

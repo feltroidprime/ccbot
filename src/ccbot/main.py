@@ -12,13 +12,15 @@ import sys
 
 def main() -> None:
     """Main entry point."""
-    if len(sys.argv) > 1 and sys.argv[1] == "hook":
+    subcommand = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    if subcommand == "hook":
         from .hook import hook_main
 
         hook_main()
         return
 
-    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+    if subcommand == "setup":
         import argparse as _ap
 
         p = _ap.ArgumentParser(prog="ccbot setup", description="Configure ccbot fleet")

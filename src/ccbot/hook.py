@@ -102,10 +102,7 @@ def _uninstall_hook() -> int:
         entry
         for entry in session_start
         if not any(
-            (
-                _HOOK_COMMAND_SUFFIX in h.get("command", "")
-                or "ccbot hook" in h.get("command", "")
-            )
+            "ccbot hook" in h.get("command", "")
             for h in entry.get("hooks", [])
             if isinstance(h, dict)
         )
@@ -343,39 +340,38 @@ def hook_main() -> None:
         with open(lock_path, "w") as lock_f:
             fcntl.flock(lock_f, fcntl.LOCK_EX)
             logger.debug("Acquired lock on %s", lock_path)
-            try:
-                session_map: dict[str, dict[str, str]] = {}
-                if map_file.exists():
-                    try:
-                        session_map = json.loads(map_file.read_text())
-                    except (json.JSONDecodeError, OSError):
-                        logger.warning(
-                            "Failed to read existing session_map, starting fresh"
-                        )
 
-                session_map[session_window_key] = {
-                    "session_id": session_id,
-                    "cwd": cwd,
-                    "window_name": window_name,
-                }
+            session_map: dict[str, dict[str, str]] = {}
+            if map_file.exists():
+                try:
+                    session_map = json.loads(map_file.read_text())
+                except (json.JSONDecodeError, OSError):
+                    logger.warning(
+                        "Failed to read existing session_map, starting fresh"
+                    )
 
-                # Clean up old-format key ("session:window_name") if it exists.
-                # Previous versions keyed by window_name instead of window_id.
-                old_key = f"{tmux_session_name}:{window_name}"
-                if old_key != session_window_key and old_key in session_map:
-                    del session_map[old_key]
-                    logger.info("Removed old-format session_map key: %s", old_key)
+            session_map[session_window_key] = {
+                "session_id": session_id,
+                "cwd": cwd,
+                "window_name": window_name,
+            }
 
-                from .utils import atomic_write_json
+            # Clean up old-format key ("session:window_name") if it exists.
+            # Previous versions keyed by window_name instead of window_id.
+            old_key = f"{tmux_session_name}:{window_name}"
+            if old_key != session_window_key and old_key in session_map:
+                del session_map[old_key]
+                logger.info("Removed old-format session_map key: %s", old_key)
 
-                atomic_write_json(map_file, session_map)
-                logger.info(
-                    "Updated session_map: %s -> session_id=%s, cwd=%s",
-                    session_window_key,
-                    session_id,
-                    cwd,
-                )
-            finally:
-                fcntl.flock(lock_f, fcntl.LOCK_UN)
+            from .utils import atomic_write_json
+
+            atomic_write_json(map_file, session_map)
+            logger.info(
+                "Updated session_map: %s -> session_id=%s, cwd=%s",
+                session_window_key,
+                session_id,
+                cwd,
+            )
+            # Lock is released when lock_f is closed at end of `with` block
     except OSError as e:
         logger.error("Failed to write session_map: %s", e)

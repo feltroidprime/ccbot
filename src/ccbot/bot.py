@@ -781,51 +781,24 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     text = update.message.text
 
-    # Ignore text in machine picker mode (only for the same thread)
-    if (
-        context.user_data
-        and context.user_data.get(STATE_KEY) == STATE_SELECTING_MACHINE
-    ):
+    # Ignore text while a picker/browser is active (only for the same thread)
+    _PICKER_STATES = {
+        STATE_SELECTING_MACHINE: ("machine picker", clear_browse_state),
+        STATE_SELECTING_WINDOW: ("window picker", clear_window_picker_state),
+        STATE_BROWSING_DIRECTORY: ("directory browser", clear_browse_state),
+    }
+    current_state = context.user_data.get(STATE_KEY) if context.user_data else None
+    if current_state in _PICKER_STATES and context.user_data is not None:
+        picker_name, clear_fn = _PICKER_STATES[current_state]
         pending_tid = context.user_data.get("_pending_thread_id")
         if pending_tid == thread_id:
             await safe_reply(
                 update.message,
-                "Please use the machine picker above, or tap Cancel.",
+                f"Please use the {picker_name} above, or tap Cancel.",
             )
             return
         # Stale picker state from a different thread — clear it
-        clear_browse_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
-
-    # Ignore text in window picker mode (only for the same thread)
-    if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_WINDOW:
-        pending_tid = context.user_data.get("_pending_thread_id")
-        if pending_tid == thread_id:
-            await safe_reply(
-                update.message,
-                "Please use the window picker above, or tap Cancel.",
-            )
-            return
-        # Stale picker state from a different thread — clear it
-        clear_window_picker_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
-
-    # Ignore text in directory browsing mode (only for the same thread)
-    if (
-        context.user_data
-        and context.user_data.get(STATE_KEY) == STATE_BROWSING_DIRECTORY
-    ):
-        pending_tid = context.user_data.get("_pending_thread_id")
-        if pending_tid == thread_id:
-            await safe_reply(
-                update.message,
-                "Please use the directory browser above, or tap Cancel.",
-            )
-            return
-        # Stale browsing state from a different thread — clear it
-        clear_browse_state(context.user_data)
+        clear_fn(context.user_data)
         context.user_data.pop("_pending_thread_id", None)
         context.user_data.pop("_pending_thread_text", None)
 

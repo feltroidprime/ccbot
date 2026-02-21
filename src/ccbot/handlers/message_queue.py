@@ -685,7 +685,7 @@ def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> 
 
 async def shutdown_workers() -> None:
     """Stop all queue workers (called during bot shutdown)."""
-    for _, worker in list(_queue_workers.items()):
+    for worker in _queue_workers.values():
         worker.cancel()
         try:
             await worker

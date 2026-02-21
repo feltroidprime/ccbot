@@ -355,7 +355,7 @@ class TranscriptParser:
         if not text:
             return ""
 
-        line_count = text.count("\n") + 1 if text else 0
+        line_count = text.count("\n") + 1
 
         # Tool-specific statistics
         if tool_name == "Read":
@@ -363,9 +363,7 @@ class TranscriptParser:
             return f"  ⎿  Read {line_count} lines"
 
         elif tool_name == "Write":
-            # Write: show lines written
-            stats = f"  ⎿  Wrote {line_count} lines"
-            return stats
+            return f"  ⎿  Wrote {line_count} lines"
 
         elif tool_name == "Bash":
             # Bash: show output line count
@@ -535,28 +533,16 @@ class TranscriptParser:
                                 tool_name=name,
                                 input_data=input_data,
                             )
-                            # Also emit tool_use entry with tool_name for immediate handling
-                            result.append(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=summary,
-                                    content_type="tool_use",
-                                    tool_use_id=tool_id,
-                                    timestamp=entry_timestamp,
-                                    tool_name=name,
-                                )
+                        result.append(
+                            ParsedEntry(
+                                role="assistant",
+                                text=summary,
+                                content_type="tool_use",
+                                tool_use_id=tool_id or None,
+                                timestamp=entry_timestamp,
+                                tool_name=name,
                             )
-                        else:
-                            result.append(
-                                ParsedEntry(
-                                    role="assistant",
-                                    text=summary,
-                                    content_type="tool_use",
-                                    tool_use_id=tool_id or None,
-                                    timestamp=entry_timestamp,
-                                    tool_name=name,
-                                )
-                            )
+                        )
 
                     elif btype == "thinking":
                         thinking_text = block.get("thinking", "")
