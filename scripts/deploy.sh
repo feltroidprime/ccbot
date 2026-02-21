@@ -85,7 +85,7 @@ if ssh_cmd "${SSH_USER}@${BOT_HOST}" "bash -lc 'uv tool upgrade ccbot'" >/dev/nu
 
 # --- Step 3: Run ccbot setup --headless on bot host (upgrades remaining machines) ---
 bold "==> Running ccbot setup --headless on bot host"
-ssh_cmd "${SSH_USER}@${BOT_HOST}" "bash -lic 'ccbot setup --headless'" 2>&1 | sed 's/^/    /'
+ssh_cmd "${SSH_USER}@${BOT_HOST}" 'eval "$(keychain --eval --quiet 2>/dev/null)"; bash -lc "ccbot setup --headless"' 2>&1 | sed 's/^/    /'
 
 # --- Step 4: Restart bot ---
 bold "==> Restarting bot on ${BOT_HOST}"

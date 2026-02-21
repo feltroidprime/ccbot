@@ -106,12 +106,13 @@ def _ssh_check(user: str, host: str) -> bool:
 def _ssh_run(
     user: str, host: str, cmd: str, timeout: int = 30
 ) -> subprocess.CompletedProcess[str]:
-    """Run a command on a remote machine via SSH interactive login shell.
+    """Run a command on a remote machine via SSH with PATH and ssh-agent.
 
-    Uses bash -lic to ensure .bashrc is sourced (needed for keychain/ssh-agent).
+    Sources keychain for ssh-agent (needed for nested SSH), then runs in login shell.
     """
+    wrapped = f'eval "$(keychain --eval --quiet 2>/dev/null)"; bash -lc {cmd!r}'
     return subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", f"{user}@{host}", f"bash -lic {cmd!r}"],
+        ["ssh", "-o", "BatchMode=yes", f"{user}@{host}", wrapped],
         capture_output=True,
         text=True,
         timeout=timeout,
