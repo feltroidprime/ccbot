@@ -112,46 +112,19 @@ async def send_history(
         end_byte=end_byte if end_byte > 0 else None,
     )
 
+    # Filter messages based on config
+    if not config.show_user_messages:
+        messages = [m for m in messages if m["role"] == "assistant"]
+    total = len(messages)
+
     if total == 0:
-        if is_unread:
-            text = f"📬 [{display_name}] No unread messages."
-        else:
-            text = f"📋 [{display_name}] No messages yet."
+        icon = "📬" if is_unread else "📋"
+        empty_label = "No unread messages." if is_unread else "No messages yet."
+        text = f"{icon} [{display_name}] {empty_label}"
         keyboard = None
     else:
         _start = TranscriptParser.EXPANDABLE_QUOTE_START
         _end = TranscriptParser.EXPANDABLE_QUOTE_END
-
-        # Filter messages based on config
-        if config.show_user_messages:
-            # Keep both user and assistant messages
-            pass
-        else:
-            # Filter to assistant messages only
-            messages = [m for m in messages if m["role"] == "assistant"]
-        total = len(messages)
-        if total == 0:
-            if is_unread:
-                text = f"📬 [{display_name}] No unread messages."
-            else:
-                text = f"📋 [{display_name}] No messages yet."
-            keyboard = None
-            if edit:
-                await safe_edit(target, text, reply_markup=keyboard)
-            elif bot is not None and user_id is not None:
-                await safe_send(
-                    bot,
-                    session_manager.resolve_chat_id(user_id, message_thread_id),
-                    text,
-                    message_thread_id=message_thread_id,
-                    reply_markup=keyboard,
-                )
-            else:
-                await safe_reply(target, text, reply_markup=keyboard)
-            # Update offset even if no assistant messages
-            if user_id is not None and end_byte > 0:
-                session_manager.update_user_window_offset(user_id, window_id, end_byte)
-            return
 
         if is_unread:
             header = f"📬 [{display_name}] {total} unread messages"
@@ -160,17 +133,9 @@ async def send_history(
 
         lines = [header]
         for msg in messages:
-            # Format timestamp as HH:MM
-            ts = msg.get("timestamp")
-            if ts:
-                try:
-                    # ISO format: 2024-01-15T14:32:00.000Z
-                    time_part = ts.split("T")[1] if "T" in ts else ts
-                    hh_mm = time_part[:5]  # "14:32"
-                except (IndexError, TypeError):
-                    hh_mm = ""
-            else:
-                hh_mm = ""
+            # Format timestamp as HH:MM from ISO format (2024-01-15T14:32:00.000Z)
+            ts = msg.get("timestamp", "")
+            hh_mm = ts.split("T")[1][:5] if "T" in ts else ""
 
             # Add separator with time
             if hh_mm:

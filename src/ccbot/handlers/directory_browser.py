@@ -194,7 +194,7 @@ async def build_directory_browser(
 
     # Display path: replace home dir with ~ for local machine only
     local_id = machine_registry.local_machine_id
-    if machine_id == "local" or machine_id == local_id:
+    if machine_id in ("local", local_id):
         display_path = str(resolved_path).replace(str(Path.home()), "~")
     else:
         display_path = path_str

@@ -73,7 +73,7 @@ async def send_with_fallback(
         except RetryAfter:
             raise
         except Exception as e:
-            logger.error(f"Failed to send message to {chat_id}: {e}")
+            logger.error("Failed to send message to %d: %s", chat_id, e)
             return None
 
 
@@ -136,7 +136,7 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
         except RetryAfter:
             raise
         except Exception as e:
-            logger.error(f"Failed to reply: {e}")
+            logger.error("Failed to reply: %s", e)
             raise
 
 
@@ -188,4 +188,4 @@ async def safe_send(
         except RetryAfter:
             raise
         except Exception as e:
-            logger.error(f"Failed to send message to {chat_id}: {e}")
+            logger.error("Failed to send message to %d: %s", chat_id, e)

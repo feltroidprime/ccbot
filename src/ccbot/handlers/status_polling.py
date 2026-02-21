@@ -186,10 +186,12 @@ async def status_poll_loop(bot: Bot) -> None:
                     )
                 except Exception as e:
                     logger.debug(
-                        f"Status update error for user {user_id} "
-                        f"thread {thread_id}: {e}"
+                        "Status update error for user %d thread %s: %s",
+                        user_id,
+                        thread_id,
+                        e,
                     )
         except Exception as e:
-            logger.error(f"Status poll loop error: {e}")
+            logger.error("Status poll loop error: %s", e)
 
         await asyncio.sleep(STATUS_POLL_INTERVAL)

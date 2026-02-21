@@ -384,19 +384,22 @@ class MachineRegistry:
         self._display_names: dict[str, str] = {}
         self._load(machines_file)
 
+    def _set_local_fallback(self) -> None:
+        """Reset to a single local machine (fallback when config is missing/invalid)."""
+        self._machines = {"local": LocalMachine("local")}
+        self._local_machine_id = "local"
+
     def _load(self, path: Path) -> None:
         """Load machine configurations from a JSON file."""
         if not path.exists():
-            self._machines = {"local": LocalMachine("local")}
-            self._local_machine_id = "local"
+            self._set_local_fallback()
             return
 
         try:
             data = json.loads(path.read_text())
         except Exception:
             logger.exception("Failed to parse machines config: %s", path)
-            self._machines = {"local": LocalMachine("local")}
-            self._local_machine_id = "local"
+            self._set_local_fallback()
             return
 
         self.hook_port = int(data.get("hook_port", self.hook_port))
@@ -419,8 +422,7 @@ class MachineRegistry:
             self._display_names[machine_id] = cfg.get("display", machine_id)
 
         if not self._machines:
-            self._machines = {"local": LocalMachine("local")}
-            self._local_machine_id = "local"
+            self._set_local_fallback()
 
     def get(self, machine_id: str) -> MachineConnection:
         """Return machine by ID; fall back to local machine if not found."""
@@ -442,6 +444,4 @@ class MachineRegistry:
         return self._display_names.get(machine_id, machine_id.capitalize())
 
 
-from .config import config as _config  # noqa: E402
-
-machine_registry = MachineRegistry(_config.machines_file)
+machine_registry = MachineRegistry(config.machines_file)

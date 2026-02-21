@@ -98,6 +98,13 @@ UI_PATTERNS: list[UIPattern] = [
 # ── Post-processing ──────────────────────────────────────────────────────
 
 _RE_LONG_DASH = re.compile(r"^─{5,}$")
+_RE_PROGRESS_BAR = re.compile(r"^[\u2580-\u259f\s]+")
+
+
+def _is_chrome_separator(line: str) -> bool:
+    """Check if a line is a Claude Code chrome separator (20+ ─ characters)."""
+    stripped = line.strip()
+    return len(stripped) >= 20 and all(c == "─" for c in stripped)
 
 
 def _shorten_separators(text: str) -> str:
@@ -195,8 +202,7 @@ def parse_status_line(pane_text: str) -> str | None:
     chrome_idx: int | None = None
     search_start = max(0, len(lines) - 10)
     for i in range(search_start, len(lines)):
-        stripped = lines[i].strip()
-        if len(stripped) >= 20 and all(c == "─" for c in stripped):
+        if _is_chrome_separator(lines[i]):
             chrome_idx = i
             break
 
@@ -234,8 +240,7 @@ def strip_pane_chrome(lines: list[str]) -> list[str]:
     """
     search_start = max(0, len(lines) - 10)
     for i in range(search_start, len(lines)):
-        stripped = lines[i].strip()
-        if len(stripped) >= 20 and all(c == "─" for c in stripped):
+        if _is_chrome_separator(lines[i]):
             return lines[:i]
     return lines
 
@@ -332,7 +337,7 @@ def parse_usage_output(pane_text: str) -> UsageInfo | None:
         # Remove progress bar block characters but keep the rest
         # Progress bars are like: █████▋   38% used
         # Strip leading block chars, keep the percentage
-        stripped = re.sub(r"^[\u2580-\u259f\s]+", "", stripped).strip()
+        stripped = _RE_PROGRESS_BAR.sub("", stripped).strip()
         if stripped:
             cleaned.append(stripped)
 
