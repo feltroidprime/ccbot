@@ -14,6 +14,7 @@ dependencies = [
     "aiofiles>=24.0.0",
     "asyncssh>=2.18.0",
     "aiohttp>=3.10.0",
+    "prompt_toolkit>=3.0.0",
 ]
 
 [project.scripts]
