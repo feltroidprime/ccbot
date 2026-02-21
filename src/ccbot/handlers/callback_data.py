@@ -7,6 +7,9 @@ Constants:
   - CB_HISTORY_*: History pagination
   - CB_DIR_*: Directory browser navigation
   - CB_WIN_*: Window picker (bind existing unbound window)
+  - CB_MACHINE_SELECT: Machine picker selection
+  - CB_PERM_NORMAL: Permissions normal mode
+  - CB_PERM_DANGEROUS: Permissions skip-permissions mode
   - CB_SCREENSHOT_*: Screenshot refresh
   - CB_ASK_*: Interactive UI navigation (arrows, enter, esc)
   - CB_KEYS_PREFIX: Screenshot control keys (kb:<key_id>:<window>)
@@ -27,6 +30,13 @@ CB_DIR_PAGE = "db:page:"
 CB_WIN_BIND = "wb:sel:"  # wb:sel:<index>
 CB_WIN_NEW = "wb:new"  # proceed to directory browser
 CB_WIN_CANCEL = "wb:cancel"
+
+# Machine picker
+CB_MACHINE_SELECT = "machine_select:"  # machine picker selection (machine_id appended)
+
+# Permissions mode picker
+CB_PERM_NORMAL = "perm_normal"  # permissions: normal mode
+CB_PERM_DANGEROUS = "perm_dangerous"  # permissions: skip-permissions mode
 
 # Screenshot
 CB_SCREENSHOT_REFRESH = "ss:ref:"

@@ -56,6 +56,7 @@ from telegram.ext import (
 )
 
 from .config import config
+from .machines import machine_registry
 from .handlers.callback_data import (
     CB_ASK_DOWN,
     CB_ASK_ENTER,
@@ -74,6 +75,9 @@ from .handlers.callback_data import (
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_KEYS_PREFIX,
+    CB_MACHINE_SELECT,
+    CB_PERM_DANGEROUS,
+    CB_PERM_NORMAL,
     CB_SCREENSHOT_REFRESH,
     CB_WIN_BIND,
     CB_WIN_CANCEL,
@@ -81,13 +85,17 @@ from .handlers.callback_data import (
 )
 from .handlers.directory_browser import (
     BROWSE_DIRS_KEY,
+    BROWSE_MACHINE_KEY,
     BROWSE_PAGE_KEY,
     BROWSE_PATH_KEY,
     STATE_BROWSING_DIRECTORY,
     STATE_KEY,
+    STATE_SELECTING_MACHINE,
     STATE_SELECTING_WINDOW,
     UNBOUND_WINDOWS_KEY,
     build_directory_browser,
+    build_machine_picker,
+    build_permissions_picker,
     build_window_picker,
     clear_browse_state,
     clear_window_picker_state,
@@ -736,6 +744,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     text = update.message.text
 
+    # Ignore text in machine picker mode (only for the same thread)
+    if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_MACHINE:
+        pending_tid = context.user_data.get("_pending_thread_id")
+        if pending_tid == thread_id:
+            await safe_reply(
+                update.message,
+                "Please use the machine picker above, or tap Cancel.",
+            )
+            return
+        # Stale picker state from a different thread — clear it
+        clear_browse_state(context.user_data)
+        context.user_data.pop("_pending_thread_id", None)
+        context.user_data.pop("_pending_thread_text", None)
+
     # Ignore text in window picker mode (only for the same thread)
     if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_WINDOW:
         pending_tid = context.user_data.get("_pending_thread_id")
@@ -809,22 +831,41 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await safe_reply(update.message, msg_text, reply_markup=keyboard)
             return
 
-        # No unbound windows — show directory browser to create a new session
-        logger.info(
-            "Unbound topic: showing directory browser (user=%d, thread=%d)",
-            user.id,
-            thread_id,
-        )
-        start_path = str(Path.cwd())
-        msg_text, keyboard, subdirs = build_directory_browser(start_path)
-        if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-            context.user_data["_pending_thread_id"] = thread_id
-            context.user_data["_pending_thread_text"] = text
-        await safe_reply(update.message, msg_text, reply_markup=keyboard)
+        # No unbound windows — show machine picker (if multiple machines) or directory browser
+        if len(machine_registry.all()) > 1:
+            # Multiple machines: show machine picker first
+            logger.info(
+                "Unbound topic: showing machine picker (user=%d, thread=%d)",
+                user.id,
+                thread_id,
+            )
+            msg_text, keyboard = build_machine_picker()
+            if context.user_data is not None:
+                context.user_data[STATE_KEY] = STATE_SELECTING_MACHINE
+                context.user_data["_pending_thread_id"] = thread_id
+                context.user_data["_pending_thread_text"] = text
+            await safe_reply(update.message, msg_text, reply_markup=keyboard)
+        else:
+            # Single machine: skip picker, go straight to directory browser
+            machine_id = machine_registry.local_machine_id
+            logger.info(
+                "Unbound topic: showing directory browser (user=%d, thread=%d)",
+                user.id,
+                thread_id,
+            )
+            start_path = str(Path.home())
+            msg_text, keyboard, subdirs = await build_directory_browser(
+                start_path, machine_id=machine_id
+            )
+            if context.user_data is not None:
+                context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+                context.user_data[BROWSE_MACHINE_KEY] = machine_id
+                context.user_data[BROWSE_PATH_KEY] = start_path
+                context.user_data[BROWSE_PAGE_KEY] = 0
+                context.user_data[BROWSE_DIRS_KEY] = subdirs
+                context.user_data["_pending_thread_id"] = thread_id
+                context.user_data["_pending_thread_text"] = text
+            await safe_reply(update.message, msg_text, reply_markup=keyboard)
         return
 
     wid = msg_binding.window_id
@@ -936,6 +977,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await safe_edit(query, "Window no longer exists.")
         await query.answer("Page updated")
 
+    # Machine picker: machine selected — transition to directory browser
+    elif data.startswith(CB_MACHINE_SELECT):
+        selected_machine_id = data[len(CB_MACHINE_SELECT):]
+        if context.user_data is not None:
+            context.user_data[BROWSE_MACHINE_KEY] = selected_machine_id
+        home_path = str(Path.home())
+        msg_text, keyboard, subdirs = await build_directory_browser(
+            home_path, machine_id=selected_machine_id, page=0
+        )
+        if context.user_data is not None:
+            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+            context.user_data[BROWSE_PATH_KEY] = home_path
+            context.user_data[BROWSE_PAGE_KEY] = 0
+            context.user_data[BROWSE_DIRS_KEY] = subdirs
+        await safe_edit(query, msg_text, reply_markup=keyboard)
+        await query.answer()
+
     # Directory browser handlers
     elif data.startswith(CB_DIR_SELECT):
         # Validate: callback must come from the same topic that started browsing
@@ -976,11 +1034,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
 
         new_path_str = str(new_path)
+        machine_id = (
+            context.user_data.get(BROWSE_MACHINE_KEY, machine_registry.local_machine_id)
+            if context.user_data
+            else machine_registry.local_machine_id
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_PATH_KEY] = new_path_str
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = build_directory_browser(new_path_str)
+        msg_text, keyboard, subdirs = await build_directory_browser(
+            new_path_str, machine_id=machine_id
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1004,11 +1069,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # No restriction - allow navigating anywhere
 
         parent_path = str(parent)
+        machine_id = (
+            context.user_data.get(BROWSE_MACHINE_KEY, machine_registry.local_machine_id)
+            if context.user_data
+            else machine_registry.local_machine_id
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_PATH_KEY] = parent_path
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = build_directory_browser(parent_path)
+        msg_text, keyboard, subdirs = await build_directory_browser(
+            parent_path, machine_id=machine_id
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1032,18 +1104,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if context.user_data
             else default_path
         )
+        machine_id = (
+            context.user_data.get(BROWSE_MACHINE_KEY, machine_registry.local_machine_id)
+            if context.user_data
+            else machine_registry.local_machine_id
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_PAGE_KEY] = pg
 
-        msg_text, keyboard, subdirs = build_directory_browser(current_path, pg)
+        msg_text, keyboard, subdirs = await build_directory_browser(
+            current_path, machine_id=machine_id, page=pg
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
 
     elif data == CB_DIR_CONFIRM:
-        default_path = str(Path.cwd())
-        selected_path = (
+        default_path = str(Path.home())
+        current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
             else default_path
@@ -1063,89 +1142,126 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
 
-        clear_browse_state(context.user_data)
-
-        success, message, created_wname, created_wid = await tmux_manager.create_window(
-            selected_path
+        machine_id = (
+            context.user_data.get(BROWSE_MACHINE_KEY, machine_registry.local_machine_id)
+            if context.user_data
+            else machine_registry.local_machine_id
         )
-        if success:
-            logger.info(
-                "Window created: %s (id=%s) at %s (user=%d, thread=%s)",
-                created_wname,
-                created_wid,
-                selected_path,
+
+        # Store selected path for permissions step, then show permissions picker
+        if context.user_data is not None:
+            context.user_data["pending_work_dir"] = current_path
+        perm_text, perm_keyboard = build_permissions_picker(machine_id, current_path)
+        await safe_edit(query, perm_text, reply_markup=perm_keyboard)
+        await query.answer()
+
+    elif data in (CB_PERM_NORMAL, CB_PERM_DANGEROUS):
+        dangerous = data == CB_PERM_DANGEROUS
+        machine_id = (
+            context.user_data.get(BROWSE_MACHINE_KEY, machine_registry.local_machine_id)
+            if context.user_data
+            else machine_registry.local_machine_id
+        )
+        work_dir = (
+            context.user_data.get("pending_work_dir", str(Path.home()))
+            if context.user_data
+            else str(Path.home())
+        )
+        pending_thread_id = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
+
+        # Create window on the selected machine
+        machine = machine_registry.get(machine_id)
+        ok, msg, window_name, window_id = await machine.create_window(
+            work_dir, dangerous=dangerous
+        )
+
+        if not ok:
+            await safe_edit(query, f"❌ Failed to create session: {msg}")
+            await query.answer()
+            return
+
+        logger.info(
+            "Window created: %s (id=%s) at %s on machine=%s dangerous=%s (user=%d, thread=%s)",
+            window_name,
+            window_id,
+            work_dir,
+            machine_id,
+            dangerous,
+            user.id,
+            pending_thread_id,
+        )
+
+        # Wait for Claude Code's SessionStart hook to register in session_map
+        await session_manager.wait_for_session_map_entry(window_id)
+
+        display = machine_registry.display_name(machine_id)
+        topic_name = f"[{display}] {window_name}"
+        if dangerous:
+            topic_name += " ⚡"
+
+        if pending_thread_id is not None:
+            # Thread bind flow: bind thread to newly created window
+            session_manager.bind_thread(
                 user.id,
                 pending_thread_id,
+                window_id,
+                window_name=window_name,
+                machine=machine_id,
+                dangerous=dangerous,
             )
-            # Wait for Claude Code's SessionStart hook to register in session_map
-            await session_manager.wait_for_session_map_entry(created_wid)
 
-            if pending_thread_id is not None:
-                # Thread bind flow: bind thread to newly created window
-                session_manager.bind_thread(
-                    user.id, pending_thread_id, created_wid, window_name=created_wname
+            # Rename the topic
+            resolved_chat = session_manager.resolve_chat_id(user.id, pending_thread_id)
+            try:
+                await context.bot.edit_forum_topic(
+                    chat_id=resolved_chat,
+                    message_thread_id=pending_thread_id,
+                    name=topic_name,
                 )
+            except Exception as e:
+                logger.debug(f"Failed to rename topic: {e}")
 
-                # Rename the topic to match the window name
-                resolved_chat = session_manager.resolve_chat_id(
-                    user.id, pending_thread_id
-                )
-                try:
-                    await context.bot.edit_forum_topic(
-                        chat_id=resolved_chat,
-                        message_thread_id=pending_thread_id,
-                        name=created_wname,
-                    )
-                except Exception as e:
-                    logger.debug(f"Failed to rename topic: {e}")
+        # Clear browser and pending state
+        clear_browse_state(context.user_data)
+        if context.user_data is not None:
+            context.user_data.pop("pending_work_dir", None)
+            context.user_data.pop(BROWSE_MACHINE_KEY, None)
 
-                await safe_edit(
-                    query,
-                    f"✅ {message}\n\nBound to this topic. Send messages here.",
-                )
+        await safe_edit(query, f"✅ Session started on {display}")
+        await query.answer()
 
-                # Send pending text if any
-                pending_text = (
-                    context.user_data.get("_pending_thread_text")
-                    if context.user_data
-                    else None
-                )
-                if pending_text:
-                    logger.debug(
-                        "Forwarding pending text to window %s (len=%d)",
-                        created_wname,
-                        len(pending_text),
-                    )
-                    if context.user_data is not None:
-                        context.user_data.pop("_pending_thread_text", None)
-                        context.user_data.pop("_pending_thread_id", None)
-                    created_binding = session_manager.get_binding_for_thread(
+        # Forward pending message if any
+        pending_text = (
+            context.user_data.get("_pending_thread_text") if context.user_data else None
+        )
+        if context.user_data is not None:
+            context.user_data.pop("_pending_thread_text", None)
+            context.user_data.pop("_pending_thread_id", None)
+        if pending_text and window_id and pending_thread_id is not None:
+            created_binding = session_manager.get_binding_for_thread(
+                user.id, pending_thread_id
+            )
+            send_ok, send_msg = await session_manager.send_to_window(
+                window_id,
+                pending_text,
+                machine_id=created_binding.machine if created_binding else machine_id,
+            )
+            if not send_ok:
+                logger.warning("Failed to forward pending text: %s", send_msg)
+                if pending_thread_id is not None:
+                    resolved_chat = session_manager.resolve_chat_id(
                         user.id, pending_thread_id
                     )
-                    send_ok, send_msg = await session_manager.send_to_window(
-                        created_wid,
-                        pending_text,
-                        machine_id=created_binding.machine if created_binding else "local",
+                    await safe_send(
+                        context.bot,
+                        resolved_chat,
+                        f"❌ Failed to send pending message: {send_msg}",
+                        message_thread_id=pending_thread_id,
                     )
-                    if not send_ok:
-                        logger.warning("Failed to forward pending text: %s", send_msg)
-                        await safe_send(
-                            context.bot,
-                            resolved_chat,
-                            f"❌ Failed to send pending message: {send_msg}",
-                            message_thread_id=pending_thread_id,
-                        )
-                elif context.user_data is not None:
-                    context.user_data.pop("_pending_thread_id", None)
-            else:
-                # Should not happen in topic-only mode, but handle gracefully
-                await safe_edit(query, f"✅ {message}")
-        else:
-            await safe_edit(query, f"❌ {message}")
-            if pending_thread_id is not None and context.user_data is not None:
-                context.user_data.pop("_pending_thread_id", None)
-                context.user_data.pop("_pending_thread_text", None)
-        await query.answer("Created" if success else "Failed")
+        elif context.user_data is not None:
+            context.user_data.pop("_pending_thread_id", None)
 
     elif data == CB_DIR_CANCEL:
         pending_tid = (
@@ -1251,14 +1367,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         # Preserve pending thread info, clear only picker state
         clear_window_picker_state(context.user_data)
-        start_path = str(Path.cwd())
-        msg_text, keyboard, subdirs = build_directory_browser(start_path)
-        if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
+        # Determine machine to use
+        if len(machine_registry.all()) > 1:
+            # Multiple machines: show machine picker
+            msg_text, keyboard = build_machine_picker()
+            if context.user_data is not None:
+                context.user_data[STATE_KEY] = STATE_SELECTING_MACHINE
+            await safe_edit(query, msg_text, reply_markup=keyboard)
+        else:
+            machine_id = machine_registry.local_machine_id
+            start_path = str(Path.home())
+            msg_text, keyboard, subdirs = await build_directory_browser(
+                start_path, machine_id=machine_id
+            )
+            if context.user_data is not None:
+                context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
+                context.user_data[BROWSE_MACHINE_KEY] = machine_id
+                context.user_data[BROWSE_PATH_KEY] = start_path
+                context.user_data[BROWSE_PAGE_KEY] = 0
+                context.user_data[BROWSE_DIRS_KEY] = subdirs
+            await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
 
     # Window picker: cancel
@@ -1596,7 +1724,6 @@ async def post_init(application: Application) -> None:
     logger.info("Status polling task started")
 
     from .hook_server import start_hook_server
-    from .machines import machine_registry
 
     hook_runner = await start_hook_server(
         on_hook=_on_remote_hook,
