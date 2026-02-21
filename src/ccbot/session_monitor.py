@@ -157,7 +157,7 @@ class SessionMonitor:
                             )
 
                 except (json.JSONDecodeError, OSError) as e:
-                    logger.debug(f"Error reading index {index_file}: {e}")
+                    logger.debug("Error reading index %s: %s", index_file, e)
 
             # Pick up un-indexed .jsonl files
             try:
@@ -192,7 +192,7 @@ class SessionMonitor:
                         )
                     )
             except OSError as e:
-                logger.debug(f"Error scanning jsonl files in {project_dir}: {e}")
+                logger.debug("Error scanning jsonl files in %s: %s", project_dir, e)
 
         return sessions
 
@@ -328,7 +328,7 @@ class SessionMonitor:
                     )
                     self.state.update_session(tracked)
                     self._file_mtimes[session_info.session_id] = 0.0
-                    logger.info(f"Started tracking session: {session_info.session_id}")
+                    logger.info("Started tracking session: %s", session_info.session_id)
                     continue
 
                 # Check file size to see if file has changed.
@@ -358,8 +358,9 @@ class SessionMonitor:
 
                 if new_entries:
                     logger.debug(
-                        f"Read {len(new_entries)} new entries for "
-                        f"session {session_info.session_id}"
+                        "Read %d new entries for session %s",
+                        len(new_entries),
+                        session_info.session_id,
                     )
 
                 # Parse new entries using the shared logic, carrying over pending tools
@@ -395,7 +396,9 @@ class SessionMonitor:
                 self.state.update_session(tracked)
 
             except OSError as e:
-                logger.debug(f"Error processing session {session_info.session_id}: {e}")
+                logger.debug(
+                    "Error processing session %s: %s", session_info.session_id, e
+                )
 
         self.state.save_if_dirty()
         return new_messages
@@ -452,7 +455,8 @@ class SessionMonitor:
 
         if stale_sessions:
             logger.info(
-                f"[Startup cleanup] Removing {len(stale_sessions)} stale sessions"
+                "[Startup cleanup] Removing %d stale sessions",
+                len(stale_sessions),
             )
             for session_id in stale_sessions:
                 self.state.remove_session(session_id)
@@ -541,10 +545,10 @@ class SessionMonitor:
                         try:
                             await self._message_callback(msg)
                         except Exception as e:
-                            logger.error(f"Message callback error: {e}")
+                            logger.error("Message callback error: %s", e)
 
             except Exception as e:
-                logger.error(f"Monitor loop error: {e}")
+                logger.error("Monitor loop error: %s", e)
 
             await asyncio.sleep(self.poll_interval)
 

@@ -357,54 +357,35 @@ class TranscriptParser:
 
         line_count = text.count("\n") + 1
 
-        # Tool-specific statistics
-        if tool_name == "Read":
-            # Read: show line count instead of full content
-            return f"  ⎿  Read {line_count} lines"
+        def _nonempty_line_count() -> int:
+            return sum(1 for line in text.split("\n") if line.strip())
 
-        elif tool_name == "Write":
+        # Read/Write: stats only, no expandable quote
+        if tool_name == "Read":
+            return f"  ⎿  Read {line_count} lines"
+        if tool_name == "Write":
             return f"  ⎿  Wrote {line_count} lines"
 
-        elif tool_name == "Bash":
-            # Bash: show output line count
-            if line_count > 0:
-                stats = f"  ⎿  Output {line_count} lines"
-                return stats + "\n" + cls._format_expandable_quote(text)
-            return cls._format_expandable_quote(text)
-
+        # Compute stats line based on tool type
+        stats: str | None = None
+        if tool_name == "Bash":
+            stats = f"  ⎿  Output {line_count} lines"
         elif tool_name == "Grep":
-            # Grep: show match count (count non-empty lines)
-            matches = len([line for line in text.split("\n") if line.strip()])
-            stats = f"  ⎿  Found {matches} matches"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
+            stats = f"  ⎿  Found {_nonempty_line_count()} matches"
         elif tool_name == "Glob":
-            # Glob: show file count
-            files = len([line for line in text.split("\n") if line.strip()])
-            stats = f"  ⎿  Found {files} files"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
+            stats = f"  ⎿  Found {_nonempty_line_count()} files"
         elif tool_name == "Task":
-            # Task: show output length
-            if line_count > 0:
-                stats = f"  ⎿  Agent output {line_count} lines"
-                return stats + "\n" + cls._format_expandable_quote(text)
-            return cls._format_expandable_quote(text)
-
+            stats = f"  ⎿  Agent output {line_count} lines"
         elif tool_name == "WebFetch":
-            # WebFetch: show content length
-            char_count = len(text)
-            stats = f"  ⎿  Fetched {char_count} characters"
-            return stats + "\n" + cls._format_expandable_quote(text)
-
+            stats = f"  ⎿  Fetched {len(text)} characters"
         elif tool_name == "WebSearch":
-            # WebSearch: show results count (estimate by sections)
-            results = text.count("\n\n") + 1 if text else 0
+            results = text.count("\n\n") + 1
             stats = f"  ⎿  {results} search results"
-            return stats + "\n" + cls._format_expandable_quote(text)
 
-        # Default: expandable quote without stats
-        return cls._format_expandable_quote(text)
+        quoted = cls._format_expandable_quote(text)
+        if stats:
+            return stats + "\n" + quoted
+        return quoted
 
     @classmethod
     def parse_entries(

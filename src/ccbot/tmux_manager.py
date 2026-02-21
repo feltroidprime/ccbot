@@ -116,7 +116,7 @@ class TmuxManager:
                         )
                     )
                 except Exception as e:
-                    logger.debug(f"Error getting window info: {e}")
+                    logger.debug("Error getting window info: %s", e)
 
             return windows
 
@@ -181,11 +181,11 @@ class TmuxManager:
                 if proc.returncode == 0:
                     return stdout.decode("utf-8")
                 logger.error(
-                    f"Failed to capture pane {window_id}: {stderr.decode('utf-8')}"
+                    "Failed to capture pane %s: %s", window_id, stderr.decode("utf-8")
                 )
                 return None
             except Exception as e:
-                logger.error(f"Unexpected error capturing pane {window_id}: {e}")
+                logger.error("Unexpected error capturing pane %s: %s", window_id, e)
                 return None
 
         # Original implementation for plain text - wrap in thread
@@ -298,7 +298,7 @@ class TmuxManager:
                 logger.info("Killed window %s", window_id)
                 return True
             except Exception as e:
-                logger.error(f"Failed to kill window {window_id}: {e}")
+                logger.error("Failed to kill window %s: %s", window_id, e)
                 return False
 
         return await asyncio.to_thread(_sync_kill)
@@ -375,7 +375,7 @@ class TmuxManager:
                 )
 
             except Exception as e:
-                logger.error(f"Failed to create window: {e}")
+                logger.error("Failed to create window: %s", e)
                 return False, f"Failed to create window: {e}", "", ""
 
         return await asyncio.to_thread(_create_and_start)

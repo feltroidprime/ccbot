@@ -57,7 +57,7 @@ class MonitorState:
     def load(self) -> None:
         """Load state from file."""
         if not self.state_file.exists():
-            logger.debug(f"State file does not exist: {self.state_file}")
+            logger.debug("State file does not exist: %s", self.state_file)
             return
 
         try:
@@ -67,10 +67,11 @@ class MonitorState:
                 k: TrackedSession.from_dict(v) for k, v in sessions.items()
             }
             logger.info(
-                f"Loaded {len(self.tracked_sessions)} tracked sessions from state"
+                "Loaded %d tracked sessions from state",
+                len(self.tracked_sessions),
             )
         except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.warning(f"Failed to load state file: {e}")
+            logger.warning("Failed to load state file: %s", e)
             self.tracked_sessions = {}
 
     def save(self) -> None:

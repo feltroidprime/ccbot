@@ -189,7 +189,7 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
     """Process message tasks for a user sequentially."""
     queue = _message_queues[user_id]
     lock = _queue_locks[user_id]
-    logger.info(f"Message queue worker started for user {user_id}")
+    logger.info("Message queue worker started for user %d", user_id)
 
     while True:
         try:
@@ -220,7 +220,9 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                         queue, task, lock
                     )
                     if merge_count > 0:
-                        logger.debug(f"Merged {merge_count} tasks for user {user_id}")
+                        logger.debug(
+                            "Merged %d tasks for user %d", merge_count, user_id
+                        )
                         # Mark merged tasks as done
                         for _ in range(merge_count):
                             queue.task_done()
@@ -251,14 +253,16 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                     )
                     await asyncio.sleep(retry_secs)
             except Exception as e:
-                logger.error(f"Error processing message task for user {user_id}: {e}")
+                logger.error(
+                    "Error processing message task for user %d: %s", user_id, e
+                )
             finally:
                 queue.task_done()
         except asyncio.CancelledError:
-            logger.info(f"Message queue worker cancelled for user {user_id}")
+            logger.info("Message queue worker cancelled for user %d", user_id)
             break
         except Exception as e:
-            logger.error(f"Unexpected error in queue worker for user {user_id}: {e}")
+            logger.error("Unexpected error in queue worker for user %d: %s", user_id, e)
 
 
 def _send_kwargs(thread_id: int | None) -> dict[str, int]:
@@ -333,7 +337,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 except RetryAfter:
                     raise
                 except Exception:
-                    logger.debug(f"Failed to edit tool msg {edit_msg_id}, sending new")
+                    logger.debug("Failed to edit tool msg %d, sending new", edit_msg_id)
                     # Fall through to send as new message
 
     # 2. Send content messages, converting status message to first content part
@@ -431,7 +435,7 @@ async def _convert_status_to_content(
         except RetryAfter:
             raise
         except Exception as e:
-            logger.debug(f"Failed to convert status to content: {e}")
+            logger.debug("Failed to convert status to content: %s", e)
             # Message might be deleted or too old, caller will send new message
             return None
 
@@ -498,7 +502,7 @@ async def _process_status_update_task(
                 except RetryAfter:
                     raise
                 except Exception as e:
-                    logger.debug(f"Failed to edit status message: {e}")
+                    logger.debug("Failed to edit status message: %s", e)
                     _status_msg_info.pop(skey, None)
                     await _do_send_status_message(bot, user_id, tid, wid, status_text)
     else:
@@ -557,7 +561,7 @@ async def _do_clear_status_message(
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception as e:
-            logger.debug(f"Failed to delete status message {msg_id}: {e}")
+            logger.debug("Failed to delete status message %d: %s", msg_id, e)
 
 
 async def _check_and_send_status(
