@@ -452,10 +452,15 @@ async def forward_command_handler(
     cmd_text = update.message.text or ""
     # The full text is already a slash command like "/clear" or "/compact foo"
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
-    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
-    if not wid:
+    binding = (
+        session_manager.get_binding_for_thread(user.id, thread_id)
+        if thread_id is not None
+        else None
+    )
+    if not binding:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
+    wid = binding.window_id
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -468,7 +473,9 @@ async def forward_command_handler(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
     await update.message.chat.send_action(ChatAction.TYPING)
-    success, message = await session_manager.send_to_window(wid, cc_slash)
+    success, message = await session_manager.send_to_window(
+        wid, cc_slash, machine_id=binding.machine
+    )
     if success:
         await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
         # If /clear command was sent, clear the session association
@@ -526,13 +533,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
-    if wid is None:
+    photo_binding = session_manager.get_binding_for_thread(user.id, thread_id)
+    if photo_binding is None:
         await safe_reply(
             update.message,
             "❌ No session bound to this topic. Send a text message first to create one.",
         )
         return
+    wid = photo_binding.window_id
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -564,7 +572,9 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
 
-    success, message = await session_manager.send_to_window(wid, text_to_send)
+    success, message = await session_manager.send_to_window(
+        wid, text_to_send, machine_id=photo_binding.machine
+    )
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
@@ -725,8 +735,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
-    if wid is None:
+    msg_binding = session_manager.get_binding_for_thread(user.id, thread_id)
+    if msg_binding is None:
         # Unbound topic — check for unbound windows first
         all_windows = await tmux_manager.list_windows()
         bound_ids = {b.window_id for _, _, b in session_manager.iter_thread_bindings()}
@@ -777,6 +787,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, msg_text, reply_markup=keyboard)
         return
 
+    wid = msg_binding.window_id
+
     # Bound topic — forward to bound window
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
@@ -801,7 +813,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Cancel any running bash capture — new message pushes pane content down
     _cancel_bash_capture(user.id, thread_id)
 
-    success, message = await session_manager.send_to_window(wid, text)
+    success, message = await session_manager.send_to_window(
+        wid, text, machine_id=msg_binding.machine
+    )
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
@@ -1065,9 +1079,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     if context.user_data is not None:
                         context.user_data.pop("_pending_thread_text", None)
                         context.user_data.pop("_pending_thread_id", None)
+                    created_binding = session_manager.get_binding_for_thread(
+                        user.id, pending_thread_id
+                    )
                     send_ok, send_msg = await session_manager.send_to_window(
                         created_wid,
                         pending_text,
+                        machine_id=created_binding.machine if created_binding else "local",
                     )
                     if not send_ok:
                         logger.warning("Failed to forward pending text: %s", send_msg)
@@ -1167,8 +1185,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.pop("_pending_thread_text", None)
             context.user_data.pop("_pending_thread_id", None)
         if pending_text:
+            picker_binding = session_manager.get_binding_for_thread(user.id, thread_id)
             send_ok, send_msg = await session_manager.send_to_window(
-                selected_wid, pending_text
+                selected_wid,
+                pending_text,
+                machine_id=picker_binding.machine if picker_binding else "local",
             )
             if not send_ok:
                 logger.warning("Failed to forward pending text: %s", send_msg)

@@ -32,7 +32,6 @@ from typing import Any
 import aiofiles
 
 from .config import config
-from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
 
@@ -225,31 +224,56 @@ class SessionManager:
                 pass
 
     async def resolve_stale_ids(self) -> None:
-        """Re-resolve persisted window IDs against live tmux windows.
+        """Re-resolve persisted window IDs against live tmux windows on all machines.
 
         Called on startup. Handles two cases:
         1. Old-format migration: window_name keys → window_id keys
         2. Stale IDs: window_id no longer exists but display name matches a live window
 
-        Builds {window_name: window_id} from live windows, then remaps or drops entries.
+        Iterates all machines in machine_registry to build live window maps, then
+        remaps or drops stale entries in window_states, thread_bindings, and
+        user_window_offsets.
         """
-        windows = await tmux_manager.list_windows()
-        live_by_name: dict[str, str] = {}  # window_name -> window_id
-        live_ids: set[str] = set()
-        for w in windows:
-            live_by_name[w.window_name] = w.window_id
-            live_ids.add(w.window_id)
+        from .machines import machine_registry
+
+        # Collect live windows per machine
+        live_by_machine: dict[str, dict[str, str]] = {}  # machine_id -> {name -> id}
+        live_ids_by_machine: dict[str, set[str]] = {}  # machine_id -> set of window_ids
+        live_ids_all: set[str] = set()  # all live window_ids across all machines
+
+        for machine in machine_registry.all():
+            try:
+                windows = await machine.list_windows()
+            except Exception as e:
+                logger.warning(
+                    "Could not list windows for machine %s: %s", machine.machine_id, e
+                )
+                windows = []
+            by_name: dict[str, str] = {}
+            machine_ids: set[str] = set()
+            for w in windows:
+                by_name[w.window_name] = w.window_id
+                machine_ids.add(w.window_id)
+                live_ids_all.add(w.window_id)
+            live_by_machine[machine.machine_id] = by_name
+            live_ids_by_machine[machine.machine_id] = machine_ids
+
+        local_id = machine_registry.local_machine_id
+        # For backward compat with window_states (which don't carry machine context),
+        # use local machine's live windows as the default name→id map.
+        live_by_name = live_by_machine.get(local_id, {})
 
         changed = False
 
         # --- Migrate window_states ---
+        # window_states keys are plain window_ids (no machine prefix); treat as local.
         new_window_states: dict[str, WindowState] = {}
         for key, ws in self.window_states.items():
             if self._is_window_id(key):
-                if key in live_ids:
+                if key in live_ids_all:
                     new_window_states[key] = ws
                 else:
-                    # Stale ID — try re-resolve by display name
+                    # Stale ID — try re-resolve by display name (local machine only)
                     display = self.window_display_names.get(key, ws.window_name or key)
                     new_id = live_by_name.get(display)
                     if new_id:
@@ -286,16 +310,20 @@ class SessionManager:
         self.window_states = new_window_states
 
         # --- Migrate thread_bindings ---
+        # Use binding.machine to look up the correct per-machine live set.
         for uid, bindings in self.thread_bindings.items():
             new_bindings: dict[int, WindowBinding] = {}
             for tid, binding in bindings.items():
+                machine_live_ids = live_ids_by_machine.get(binding.machine, set())
+                machine_live_by_name = live_by_machine.get(binding.machine, {})
                 wid = binding.window_id
                 if self._is_window_id(wid):
-                    if wid in live_ids:
+                    if wid in machine_live_ids:
                         new_bindings[tid] = binding
                     else:
-                        display = self.window_display_names.get(wid, wid)
-                        new_id = live_by_name.get(display)
+                        key = binding.make_key()
+                        display = self.window_display_names.get(key, wid)
+                        new_id = machine_live_by_name.get(display)
                         if new_id:
                             logger.info(
                                 "Re-resolved thread binding %s -> %s (name=%s)",
@@ -308,7 +336,9 @@ class SessionManager:
                                 machine=binding.machine,
                                 dangerous=binding.dangerous,
                             )
-                            self.window_display_names[new_id] = display
+                            self.window_display_names[
+                                f"{binding.machine}:{new_id}"
+                            ] = display
                             changed = True
                         else:
                             logger.info(
@@ -319,8 +349,8 @@ class SessionManager:
                             )
                             changed = True
                 else:
-                    # Old format: wid is window_name
-                    new_id = live_by_name.get(wid)
+                    # Old format: wid is window_name — use binding's machine
+                    new_id = machine_live_by_name.get(wid)
                     if new_id:
                         logger.info("Migrating thread binding %s -> %s", wid, new_id)
                         new_bindings[tid] = WindowBinding(
@@ -328,7 +358,7 @@ class SessionManager:
                             machine=binding.machine,
                             dangerous=binding.dangerous,
                         )
-                        self.window_display_names[new_id] = wid
+                        self.window_display_names[f"{binding.machine}:{new_id}"] = wid
                         changed = True
                     else:
                         logger.info(
@@ -350,7 +380,7 @@ class SessionManager:
             new_offsets: dict[str, int] = {}
             for key, offset in offsets.items():
                 if self._is_window_id(key):
-                    if key in live_ids:
+                    if key in live_ids_all:
                         new_offsets[key] = offset
                     else:
                         display = self.window_display_names.get(key, key)
@@ -374,7 +404,7 @@ class SessionManager:
             logger.info("Startup re-resolution complete")
 
         # Clean up session_map.json: stale window IDs and old-format keys
-        await self._cleanup_stale_session_map_entries(live_ids)
+        await self._cleanup_stale_session_map_entries(live_ids_all)
         await self._cleanup_old_format_session_map_keys()
 
     async def _cleanup_old_format_session_map_keys(self) -> None:
@@ -819,22 +849,21 @@ class SessionManager:
 
     # --- Tmux helpers ---
 
-    async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:
-        """Send text to a tmux window by ID."""
-        display = self.get_display_name(window_id)
-        logger.debug(
-            "send_to_window: window_id=%s (%s), text_len=%d",
-            window_id,
-            display,
-            len(text),
-        )
-        window = await tmux_manager.find_window_by_id(window_id)
+    async def send_to_window(
+        self, window_id: str, text: str, machine_id: str = "local"
+    ) -> tuple[bool, str]:
+        """Send text to a tmux window by ID, routing through the correct machine."""
+        from .machines import machine_registry
+
+        machine = machine_registry.get(machine_id)
+        key = f"{machine_id}:{window_id}"
+        display = self.get_display_name(key)
+        logger.debug("send_to_window: key=%s, text_len=%d", key, len(text))
+        window = await machine.find_window_by_id(window_id)
         if not window:
             return False, "Window not found (may have been closed)"
-        success = await tmux_manager.send_keys(window.window_id, text)
-        if success:
-            return True, f"Sent to {display}"
-        return False, "Failed to send keys"
+        success = await machine.send_keys(window.window_id, text)
+        return (True, f"Sent to {display}") if success else (False, "Failed to send keys")
 
     # --- Message history ---
 
