@@ -103,24 +103,9 @@ def _ssh_check(user: str, host: str) -> bool:
         return False
 
 
-def _remote_ccbot_version(user: str, host: str) -> str | None:
-    """Return ccbot version string if installed on remote, else None."""
-    try:
-        result = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", f"{user}@{host}", "ccbot --version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return None
-
-
-def _uv_install_remote(user: str, host: str) -> bool:
-    cmd = f"uv tool install 'ccbot @ git+{GITHUB_REPO}' --force 2>&1"
+def _uv_upgrade_remote(user: str, host: str) -> bool:
+    """Upgrade (or install) ccbot on a remote machine. Always pulls latest main."""
+    cmd = f"uv tool upgrade ccbot 2>&1 || uv tool install 'ccbot @ git+{GITHUB_REPO}' 2>&1"
     try:
         result = subprocess.run(
             ["ssh", f"{user}@{host}", cmd], capture_output=True, text=True, timeout=120
@@ -272,12 +257,29 @@ def setup_main(target_machine: str | None = None) -> None:
         print(f"\n[{machine_id}]")
 
         if cfg.get("type") == "local":
+            r = MachineSetupResult(machine_id=machine_id, success=True)
+            # Upgrade local ccbot
+            print("  ccbot ............ ", end="", flush=True)
+            try:
+                res = subprocess.run(
+                    ["uv", "tool", "upgrade", "ccbot"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                print("✓ (upgraded)" if res.returncode == 0 else "✗")
+                if res.returncode != 0:
+                    r.errors.append("Local upgrade failed — run: uv tool upgrade ccbot")
+            except Exception:
+                print("✗")
+                r.errors.append("Local upgrade failed — run: uv tool upgrade ccbot")
+            # Hook
             print("  hook ............. ", end="", flush=True)
             ok = _install_hook_local()
-            r = MachineSetupResult(machine_id=machine_id, success=ok)
             if not ok:
                 r.errors.append("Hook install failed — run: ccbot hook --install")
             print("✓" if ok else "✗")
+            r.success = not r.errors
             results.append(r)
             continue
 
@@ -295,21 +297,14 @@ def setup_main(target_machine: str | None = None) -> None:
             continue
         print("✓")
 
-        # ccbot: check if installed, install if missing
+        # ccbot: always upgrade to latest main
         print("  ccbot ............ ", end="", flush=True)
-        version = _remote_ccbot_version(user, host)
-        if version:
-            print(f"✓ (found: {version})")
+        if _uv_upgrade_remote(user, host):
+            print("✓ (upgraded)")
         else:
-            print("missing, installing...", end=" ", flush=True)
-            if _uv_install_remote(user, host):
-                print("✓")
-            else:
-                r.success = False
-                r.errors.append(
-                    f"Install failed — run on remote: uv tool install 'ccbot @ git+{GITHUB_REPO}'"
-                )
-                print("✗")
+            r.success = False
+            r.errors.append("Upgrade failed — run on remote: uv tool upgrade ccbot")
+            print("✗")
 
         # Hook
         if hook_url_base:
