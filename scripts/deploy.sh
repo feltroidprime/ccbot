@@ -9,7 +9,7 @@ set -euo pipefail
 # using the existing machines.json on that host).
 
 DEPLOY_CONF="$HOME/.ccbot/deploy.conf"
-REMOTE="fork"
+REMOTE="origin"
 BRANCH="main"
 TMUX_SESSION="ccbot"
 TMUX_WINDOW="__main__"
