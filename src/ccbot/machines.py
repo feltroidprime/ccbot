@@ -389,11 +389,14 @@ class MachineRegistry:
                 machine: MachineConnection = LocalMachine(machine_id)
                 self._local_machine_id = machine_id
             else:
-                machine = RemoteMachine(
-                    machine_id,
-                    host=cfg["host"],
-                    user=cfg["user"],
-                )
+                host = cfg.get("host", "")
+                user = cfg.get("user", "")
+                if not host or not user:
+                    logger.warning(
+                        "Skipping remote machine %s: missing host or user", machine_id
+                    )
+                    continue
+                machine = RemoteMachine(machine_id, host=host, user=user)
             self._machines[machine_id] = machine
             self._display_names[machine_id] = cfg.get("display", machine_id)
 

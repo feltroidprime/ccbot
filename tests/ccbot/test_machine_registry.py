@@ -68,3 +68,17 @@ def test_registry_get_unknown_falls_back_to_local(registry_json):
     reg = MachineRegistry(registry_json)
     m = reg.get("nonexistent")
     assert m.machine_id == "macbook"  # local machine
+
+def test_registry_skips_remote_with_missing_host(tmp_path):
+    data = {
+        "machines": {
+            "macbook": {"display": "MacBook", "type": "local"},
+            "broken": {"display": "Broken"},  # no host or user
+        }
+    }
+    f = tmp_path / "machines.json"
+    f.write_text(json.dumps(data))
+    reg = MachineRegistry(f)
+    ids = [m.machine_id for m in reg.all()]
+    assert "macbook" in ids
+    assert "broken" not in ids
