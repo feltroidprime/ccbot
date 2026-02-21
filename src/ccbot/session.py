@@ -40,6 +40,37 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class WindowBinding:
+    """Thread-to-window binding with machine and permissions metadata."""
+
+    window_id: str
+    machine: str = "local"
+    dangerous: bool = False
+
+    def make_key(self) -> str:
+        """Namespaced window key: 'machine:window_id'."""
+        return f"{self.machine}:{self.window_id}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "window_id": self.window_id,
+            "machine": self.machine,
+            "dangerous": self.dangerous,
+        }
+
+    @classmethod
+    def from_value(cls, val: Any) -> "WindowBinding":
+        """Load from persisted value — supports old plain-string format."""
+        if isinstance(val, str):
+            return cls(window_id=val, machine="local", dangerous=False)
+        return cls(
+            window_id=val.get("window_id", ""),
+            machine=val.get("machine", "local"),
+            dangerous=val.get("dangerous", False),
+        )
+
+
+@dataclass
 class WindowState:
     """Persistent state for a tmux window.
 
@@ -97,7 +128,7 @@ class SessionManager:
 
     window_states: dict[str, WindowState] = field(default_factory=dict)
     user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
-    thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
+    thread_bindings: dict[int, dict[int, WindowBinding]] = field(default_factory=dict)
     # window_id -> display name (window_name)
     window_display_names: dict[str, str] = field(default_factory=dict)
     # "user_id:thread_id" -> group chat_id (for supergroup forum topic routing)
@@ -120,7 +151,7 @@ class SessionManager:
                 str(uid): offsets for uid, offsets in self.user_window_offsets.items()
             },
             "thread_bindings": {
-                str(uid): {str(tid): wid for tid, wid in bindings.items()}
+                str(uid): {str(tid): b.to_dict() for tid, b in bindings.items()}
                 for uid, bindings in self.thread_bindings.items()
             },
             "window_display_names": self.window_display_names,
@@ -151,7 +182,10 @@ class SessionManager:
                     for uid, offsets in state.get("user_window_offsets", {}).items()
                 }
                 self.thread_bindings = {
-                    int(uid): {int(tid): wid for tid, wid in bindings.items()}
+                    int(uid): {
+                        int(tid): WindowBinding.from_value(val)
+                        for tid, val in bindings.items()
+                    }
                     for uid, bindings in state.get("thread_bindings", {}).items()
                 }
                 self.window_display_names = state.get("window_display_names", {})
@@ -167,8 +201,8 @@ class SessionManager:
                         break
                 if not needs_migration:
                     for bindings in self.thread_bindings.values():
-                        for wid in bindings.values():
-                            if not self._is_window_id(wid):
+                        for b in bindings.values():
+                            if not self._is_window_id(b.window_id):
                                 needs_migration = True
                                 break
                         if needs_migration:
@@ -253,22 +287,27 @@ class SessionManager:
 
         # --- Migrate thread_bindings ---
         for uid, bindings in self.thread_bindings.items():
-            new_bindings: dict[int, str] = {}
-            for tid, val in bindings.items():
-                if self._is_window_id(val):
-                    if val in live_ids:
-                        new_bindings[tid] = val
+            new_bindings: dict[int, WindowBinding] = {}
+            for tid, binding in bindings.items():
+                wid = binding.window_id
+                if self._is_window_id(wid):
+                    if wid in live_ids:
+                        new_bindings[tid] = binding
                     else:
-                        display = self.window_display_names.get(val, val)
+                        display = self.window_display_names.get(wid, wid)
                         new_id = live_by_name.get(display)
                         if new_id:
                             logger.info(
                                 "Re-resolved thread binding %s -> %s (name=%s)",
-                                val,
+                                wid,
                                 new_id,
                                 display,
                             )
-                            new_bindings[tid] = new_id
+                            new_bindings[tid] = WindowBinding(
+                                window_id=new_id,
+                                machine=binding.machine,
+                                dangerous=binding.dangerous,
+                            )
                             self.window_display_names[new_id] = display
                             changed = True
                         else:
@@ -276,23 +315,27 @@ class SessionManager:
                                 "Dropping stale thread binding: user=%d, thread=%d, wid=%s",
                                 uid,
                                 tid,
-                                val,
+                                wid,
                             )
                             changed = True
                 else:
-                    # Old format: val is window_name
-                    new_id = live_by_name.get(val)
+                    # Old format: wid is window_name
+                    new_id = live_by_name.get(wid)
                     if new_id:
-                        logger.info("Migrating thread binding %s -> %s", val, new_id)
-                        new_bindings[tid] = new_id
-                        self.window_display_names[new_id] = val
+                        logger.info("Migrating thread binding %s -> %s", wid, new_id)
+                        new_bindings[tid] = WindowBinding(
+                            window_id=new_id,
+                            machine=binding.machine,
+                            dangerous=binding.dangerous,
+                        )
+                        self.window_display_names[new_id] = wid
                         changed = True
                     else:
                         logger.info(
                             "Dropping old-format thread binding: user=%d, thread=%d, name=%s",
                             uid,
                             tid,
-                            val,
+                            wid,
                         )
                         changed = True
             self.thread_bindings[uid] = new_bindings
@@ -668,7 +711,13 @@ class SessionManager:
     # --- Thread binding management ---
 
     def bind_thread(
-        self, user_id: int, thread_id: int, window_id: str, window_name: str = ""
+        self,
+        user_id: int,
+        thread_id: int,
+        window_id: str,
+        window_name: str = "",
+        machine: str = "local",
+        dangerous: bool = False,
     ) -> None:
         """Bind a Telegram topic thread to a tmux window.
 
@@ -677,20 +726,26 @@ class SessionManager:
             thread_id: Telegram topic thread ID
             window_id: Tmux window ID (e.g. '@0')
             window_name: Display name for the window (optional)
+            machine: Machine name (default: 'local')
+            dangerous: Whether the session runs on a dangerous machine (default: False)
         """
         if user_id not in self.thread_bindings:
             self.thread_bindings[user_id] = {}
-        self.thread_bindings[user_id][thread_id] = window_id
+        binding = WindowBinding(
+            window_id=window_id, machine=machine, dangerous=dangerous
+        )
+        self.thread_bindings[user_id][thread_id] = binding
+        key = binding.make_key()
         if window_name:
             self.window_display_names[window_id] = window_name
         self._save_state()
-        display = window_name or self.get_display_name(window_id)
         logger.info(
-            "Bound thread %d -> window_id %s (%s) for user %d",
+            "Bound thread %d -> %s (%s) for user %d [dangerous=%s]",
             thread_id,
-            window_id,
-            display,
+            key,
+            window_name or key,
             user_id,
+            dangerous,
         )
 
     def unbind_thread(self, user_id: int, thread_id: int) -> str | None:
@@ -698,24 +753,31 @@ class SessionManager:
         bindings = self.thread_bindings.get(user_id)
         if not bindings or thread_id not in bindings:
             return None
-        window_id = bindings.pop(thread_id)
+        binding = bindings.pop(thread_id)
         if not bindings:
             del self.thread_bindings[user_id]
         self._save_state()
         logger.info(
             "Unbound thread %d (was %s) for user %d",
             thread_id,
-            window_id,
+            binding.window_id,
             user_id,
         )
-        return window_id
+        return binding.window_id
 
-    def get_window_for_thread(self, user_id: int, thread_id: int) -> str | None:
-        """Look up the window_id bound to a thread."""
+    def get_binding_for_thread(
+        self, user_id: int, thread_id: int
+    ) -> WindowBinding | None:
+        """Look up the WindowBinding for a thread."""
         bindings = self.thread_bindings.get(user_id)
         if not bindings:
             return None
         return bindings.get(thread_id)
+
+    def get_window_for_thread(self, user_id: int, thread_id: int) -> str | None:
+        """Look up the window_id bound to a thread."""
+        b = self.get_binding_for_thread(user_id, thread_id)
+        return b.window_id if b else None
 
     def resolve_window_for_thread(
         self,
@@ -730,15 +792,15 @@ class SessionManager:
             return None
         return self.get_window_for_thread(user_id, thread_id)
 
-    def iter_thread_bindings(self) -> Iterator[tuple[int, int, str]]:
-        """Iterate all thread bindings as (user_id, thread_id, window_id).
+    def iter_thread_bindings(self) -> Iterator[tuple[int, int, WindowBinding]]:
+        """Iterate all thread bindings as (user_id, thread_id, WindowBinding).
 
         Provides encapsulated access to thread_bindings without exposing
         the internal data structure directly.
         """
         for user_id, bindings in self.thread_bindings.items():
-            for thread_id, window_id in bindings.items():
-                yield user_id, thread_id, window_id
+            for thread_id, binding in bindings.items():
+                yield user_id, thread_id, binding
 
     async def find_users_for_session(
         self,
@@ -749,10 +811,10 @@ class SessionManager:
         Returns list of (user_id, window_id, thread_id) tuples.
         """
         result: list[tuple[int, str, int]] = []
-        for user_id, thread_id, window_id in self.iter_thread_bindings():
-            resolved = await self.resolve_session_for_window(window_id)
+        for user_id, thread_id, binding in self.iter_thread_bindings():
+            resolved = await self.resolve_session_for_window(binding.window_id)
             if resolved and resolved.session_id == session_id:
-                result.append((user_id, window_id, thread_id))
+                result.append((user_id, binding.window_id, thread_id))
         return result
 
     # --- Tmux helpers ---

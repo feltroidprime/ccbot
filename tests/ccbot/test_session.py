@@ -2,7 +2,7 @@
 
 import pytest
 
-from ccbot.session import SessionManager
+from ccbot.session import SessionManager, WindowBinding
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ class TestThreadBindings:
         mgr.bind_thread(100, 1, "@1")
         mgr.bind_thread(100, 2, "@2")
         mgr.bind_thread(200, 3, "@3")
-        result = set(mgr.iter_thread_bindings())
+        result = {(u, t, b.window_id) for u, t, b in mgr.iter_thread_bindings()}
         assert result == {(100, 1, "@1"), (100, 2, "@2"), (200, 3, "@3")}
 
 
@@ -155,3 +155,38 @@ class TestIsWindowId:
         assert mgr._is_window_id("@") is False
         assert mgr._is_window_id("") is False
         assert mgr._is_window_id("@abc") is False
+
+
+class TestWindowBinding:
+    def test_bind_with_machine_and_dangerous(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1", machine="fedora", dangerous=True)
+        binding = mgr.get_binding_for_thread(100, 1)
+        assert binding is not None
+        assert binding.window_id == "@1"
+        assert binding.machine == "fedora"
+        assert binding.dangerous is True
+
+    def test_bind_defaults_to_local_non_dangerous(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        binding = mgr.get_binding_for_thread(100, 1)
+        assert binding is not None
+        assert binding.machine == "local"
+        assert binding.dangerous is False
+
+    def test_window_binding_make_key(self) -> None:
+        b = WindowBinding(window_id="@3", machine="fedora")
+        assert b.make_key() == "fedora:@3"
+
+    def test_window_binding_from_value_old_string_format(self) -> None:
+        b = WindowBinding.from_value("@1")
+        assert b.window_id == "@1"
+        assert b.machine == "local"
+        assert b.dangerous is False
+
+    def test_window_binding_from_value_new_dict_format(self) -> None:
+        b = WindowBinding.from_value(
+            {"window_id": "@3", "machine": "fedora", "dangerous": True}
+        )
+        assert b.window_id == "@3"
+        assert b.machine == "fedora"
+        assert b.dangerous is True

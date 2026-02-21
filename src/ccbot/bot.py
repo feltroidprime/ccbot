@@ -729,7 +729,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if wid is None:
         # Unbound topic — check for unbound windows first
         all_windows = await tmux_manager.list_windows()
-        bound_ids = {wid for _, _, wid in session_manager.iter_thread_bindings()}
+        bound_ids = {b.window_id for _, _, b in session_manager.iter_thread_bindings()}
         unbound = [
             (w.window_id, w.window_name, w.cwd)
             for w in all_windows
