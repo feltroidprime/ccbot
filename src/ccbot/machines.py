@@ -3,17 +3,21 @@
 Defines the MachineConnection Protocol that all machine backends must satisfy,
 and provides LocalMachine which delegates filesystem and tmux operations to
 the existing local singletons (tmux_manager, config), and RemoteMachine which
-uses asyncssh to operate on remote machines over SSH.
+uses asyncssh to operate on remote machines over SSH. MachineRegistry loads
+machine configurations from machines.json and provides a singleton registry.
 
 Key components:
   - MachineConnection: Protocol defining the async interface for all machines.
   - LocalMachine: Implementation for the local machine using tmux_manager.
   - RemoteMachine: Implementation for remote machines via asyncssh.
+  - MachineRegistry: Registry that loads machine configs from machines.json.
+  - machine_registry: Module-level singleton MachineRegistry instance.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -345,3 +349,78 @@ class RemoteMachine:
                 "kill_window failed for window %s on %s", window_id, self._host
             )
             return False
+
+
+class MachineRegistry:
+    """Registry of configured machines loaded from machines.json.
+
+    Provides lookup by machine ID, listing all machines, and display name
+    resolution. Falls back to a single local machine if the config file is
+    absent or results in an empty machine list.
+    """
+
+    def __init__(self, machines_file: Path) -> None:
+        self._machines: dict[str, MachineConnection] = {}
+        self._local_machine_id: str = "local"
+        self.hook_port: int = 8080
+        self._display_names: dict[str, str] = {}
+        self._load(machines_file)
+
+    def _load(self, path: Path) -> None:
+        """Load machine configurations from a JSON file."""
+        if not path.exists():
+            self._machines = {"local": LocalMachine("local")}
+            self._local_machine_id = "local"
+            return
+
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            logger.exception("Failed to parse machines config: %s", path)
+            self._machines = {"local": LocalMachine("local")}
+            self._local_machine_id = "local"
+            return
+
+        self.hook_port = int(data.get("hook_port", self.hook_port))
+        machines_cfg: dict[str, dict[str, str]] = data.get("machines", {})
+
+        for machine_id, cfg in machines_cfg.items():
+            if cfg.get("type") == "local":
+                machine: MachineConnection = LocalMachine(machine_id)
+                self._local_machine_id = machine_id
+            else:
+                machine = RemoteMachine(
+                    machine_id,
+                    host=cfg["host"],
+                    user=cfg["user"],
+                )
+            self._machines[machine_id] = machine
+            self._display_names[machine_id] = cfg.get("display", machine_id)
+
+        if not self._machines:
+            self._machines = {"local": LocalMachine("local")}
+            self._local_machine_id = "local"
+
+    def get(self, machine_id: str) -> MachineConnection:
+        """Return machine by ID; fall back to local machine if not found."""
+        if machine_id in self._machines:
+            return self._machines[machine_id]
+        return self._machines[self._local_machine_id]
+
+    def all(self) -> list[MachineConnection]:
+        """Return list of all configured machines."""
+        return list(self._machines.values())
+
+    @property
+    def local_machine_id(self) -> str:
+        """Return the machine ID of the local machine."""
+        return self._local_machine_id
+
+    def display_name(self, machine_id: str) -> str:
+        """Return display name for machine ID; fallback to machine_id.capitalize()."""
+        return self._display_names.get(machine_id, machine_id.capitalize())
+
+
+from .config import config as _config  # noqa: E402
+
+machine_registry = MachineRegistry(_config.machines_file)
