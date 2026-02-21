@@ -134,15 +134,6 @@ def _install_hook_remote(
         return False
 
 
-def _check_endpoint_reachable(user: str, host: str, health_url: str) -> bool:
-    try:
-        return (
-            _ssh_run(user, host, f"curl -sf {health_url}", timeout=10).returncode == 0
-        )
-    except Exception:
-        return False
-
-
 def _install_hook_local() -> bool:
     try:
         result = subprocess.run(
@@ -320,15 +311,6 @@ def setup_main(target_machine: str | None = None) -> None:
                 r.success = False
                 r.errors.append("Hook install failed on remote")
                 print("✗")
-
-            # Endpoint
-            health_url = f"{hook_url_base}/health"
-            print("  endpoint ......... ", end="", flush=True)
-            if _check_endpoint_reachable(user, host, health_url):
-                print("✓")
-            else:
-                r.errors.append(f"Endpoint {health_url} not reachable from {host}")
-                print("✗ (warning)")
 
         results.append(r)
 
