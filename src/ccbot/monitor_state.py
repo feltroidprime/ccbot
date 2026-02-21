@@ -1,8 +1,10 @@
 """Monitor state persistence — tracks byte offsets for each session.
 
-Persists TrackedSession records (session_id, file_path, last_byte_offset)
-to ~/.ccbot/monitor_state.json so the session monitor can resume
-incremental reading after restarts without re-sending old messages.
+Persists TrackedSession records (session_id, file_path, last_byte_offset,
+machine_id) to ~/.ccbot/monitor_state.json so the session monitor can
+resume incremental reading after restarts without re-sending old messages.
+machine_id identifies which MachineConnection to use for file I/O; it
+defaults to "local" for backward compatibility with existing state files.
 
 Key classes: MonitorState, TrackedSession.
 """
@@ -23,6 +25,7 @@ class TrackedSession:
     session_id: str
     file_path: str  # Path to .jsonl file
     last_byte_offset: int = 0  # Byte offset for incremental reading
+    machine_id: str = "local"  # Machine where the JSONL file lives
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict for JSON serialization."""
@@ -35,6 +38,7 @@ class TrackedSession:
             session_id=data.get("session_id", ""),
             file_path=data.get("file_path", ""),
             last_byte_offset=data.get("last_byte_offset", 0),
+            machine_id=data.get("machine_id", "local"),
         )
 
 

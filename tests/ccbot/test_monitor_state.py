@@ -25,6 +25,28 @@ class TestTrackedSession:
         assert session.file_path == ""
         assert session.last_byte_offset == 0
 
+    def test_machine_id_defaults_to_local(self):
+        """machine_id defaults to 'local' for backward compatibility."""
+        session = TrackedSession(session_id="s1", file_path="/a.jsonl")
+        assert session.machine_id == "local"
+
+    def test_machine_id_roundtrip(self):
+        """machine_id is persisted and restored correctly."""
+        original = TrackedSession(
+            session_id="s1",
+            file_path="/remote/path.jsonl",
+            last_byte_offset=100,
+            machine_id="fedora",
+        )
+        restored = TrackedSession.from_dict(original.to_dict())
+        assert restored.machine_id == "fedora"
+
+    def test_machine_id_missing_in_dict_defaults_to_local(self):
+        """Old state files without machine_id load as 'local'."""
+        data = {"session_id": "s1", "file_path": "/a.jsonl", "last_byte_offset": 0}
+        session = TrackedSession.from_dict(data)
+        assert session.machine_id == "local"
+
 
 class TestMonitorStateLoad:
     def test_load_missing_file(self, tmp_path):

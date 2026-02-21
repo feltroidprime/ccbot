@@ -21,6 +21,7 @@ from typing import Any, Callable, Awaitable
 import aiofiles
 
 from .config import config
+from .machines import machine_registry
 from .monitor_state import MonitorState, TrackedSession
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
@@ -84,6 +85,8 @@ class SessionMonitor:
         self._last_session_map: dict[str, str] = {}  # window_key -> session_id
         # In-memory mtime cache for quick file change detection (not persisted)
         self._file_mtimes: dict[str, float] = {}  # session_id -> last_seen_mtime
+        # machine_id per session_id, populated from session_map (remote entries)
+        self._session_machines: dict[str, str] = {}  # session_id -> machine_id
 
     def set_message_callback(
         self, callback: Callable[[NewMessage], Awaitable[None]]
@@ -198,69 +201,89 @@ class SessionMonitor:
     ) -> list[dict]:
         """Read new lines from a session file using byte offset for efficiency.
 
-        Detects file truncation (e.g. after /clear) and resets offset.
-        Recovers from corrupted offsets (mid-line) by scanning to next line.
+        Uses machine_registry to read the file, supporting both local and
+        remote machines. Detects file truncation (e.g. after /clear) and
+        resets offset. Recovers from corrupted offsets (mid-line) by
+        scanning to next line.
         """
         new_entries = []
         try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                # Get file size to detect truncation
-                await f.seek(0, 2)  # Seek to end
-                file_size = await f.tell()
+            machine = machine_registry.get(session.machine_id)
+            file_path_str = str(file_path)
 
-                # Detect file truncation: if offset is beyond file size, reset
-                if session.last_byte_offset > file_size:
-                    logger.info(
-                        "File truncated for session %s "
-                        "(offset %d > size %d). Resetting.",
+            # Get file size to detect truncation
+            file_size = await machine.file_size(file_path_str)
+            if file_size is None:
+                return new_entries
+
+            # Detect file truncation: if offset is beyond file size, reset
+            if session.last_byte_offset > file_size:
+                logger.info(
+                    "File truncated for session %s "
+                    "(offset %d > size %d). Resetting.",
+                    session.session_id,
+                    session.last_byte_offset,
+                    file_size,
+                )
+                session.last_byte_offset = 0
+
+            # Read bytes from last known offset to EOF
+            raw_bytes = await machine.read_file_from_offset(
+                file_path_str, session.last_byte_offset
+            )
+            if not raw_bytes:
+                return new_entries
+
+            text = raw_bytes.decode("utf-8", errors="replace")
+
+            # Detect corrupted offset: if we're mid-line (not at '{'),
+            # scan forward to the next line start. This can happen if
+            # the state file was manually edited or corrupted.
+            if session.last_byte_offset > 0 and text and text[0] != "{":
+                logger.warning(
+                    "Corrupted offset %d in session %s (mid-line), "
+                    "scanning to next line",
+                    session.last_byte_offset,
+                    session.session_id,
+                )
+                # Advance offset past the rest of this partial line
+                newline_pos = raw_bytes.find(b"\n")
+                if newline_pos >= 0:
+                    session.last_byte_offset += newline_pos + 1
+                else:
+                    # No newline found — whole buffer is one partial line
+                    session.last_byte_offset += len(raw_bytes)
+                return []
+
+            # Parse lines, tracking safe byte offset advances.
+            # Only advance past lines that parsed successfully — a non-empty
+            # line that fails JSON parsing is likely a partial write; stop
+            # and retry next cycle.
+            safe_offset = session.last_byte_offset
+            current_byte_pos = session.last_byte_offset
+
+            for line in text.splitlines(keepends=True):
+                line_bytes = line.encode("utf-8")
+                line_byte_len = len(line_bytes)
+
+                data = TranscriptParser.parse_line(line)
+                if data:
+                    new_entries.append(data)
+                    current_byte_pos += line_byte_len
+                    safe_offset = current_byte_pos
+                elif line.strip():
+                    # Partial JSONL line — don't advance offset past it
+                    logger.warning(
+                        "Partial JSONL line in session %s, will retry next cycle",
                         session.session_id,
-                        session.last_byte_offset,
-                        file_size,
                     )
-                    session.last_byte_offset = 0
+                    break
+                else:
+                    # Empty line — safe to skip
+                    current_byte_pos += line_byte_len
+                    safe_offset = current_byte_pos
 
-                # Seek to last read position for incremental reading
-                await f.seek(session.last_byte_offset)
-
-                # Detect corrupted offset: if we're mid-line (not at '{'),
-                # scan forward to the next line start. This can happen if
-                # the state file was manually edited or corrupted.
-                if session.last_byte_offset > 0:
-                    first_char = await f.read(1)
-                    if first_char and first_char != "{":
-                        logger.warning(
-                            "Corrupted offset %d in session %s (mid-line), "
-                            "scanning to next line",
-                            session.last_byte_offset,
-                            session.session_id,
-                        )
-                        await f.readline()  # Skip rest of partial line
-                        session.last_byte_offset = await f.tell()
-                        return []
-                    await f.seek(session.last_byte_offset)  # Reset for normal read
-
-                # Read only new lines from the offset.
-                # Track safe_offset: only advance past lines that parsed
-                # successfully. A non-empty line that fails JSON parsing is
-                # likely a partial write; stop and retry next cycle.
-                safe_offset = session.last_byte_offset
-                async for line in f:
-                    data = TranscriptParser.parse_line(line)
-                    if data:
-                        new_entries.append(data)
-                        safe_offset = await f.tell()
-                    elif line.strip():
-                        # Partial JSONL line — don't advance offset past it
-                        logger.warning(
-                            "Partial JSONL line in session %s, will retry next cycle",
-                            session.session_id,
-                        )
-                        break
-                    else:
-                        # Empty line — safe to skip
-                        safe_offset = await f.tell()
-
-                session.last_byte_offset = safe_offset
+            session.last_byte_offset = safe_offset
 
         except OSError as e:
             logger.error("Error reading session file %s: %s", file_path, e)
@@ -286,33 +309,39 @@ class SessionMonitor:
                 continue
             try:
                 tracked = self.state.get_session(session_info.session_id)
+                # Determine machine_id for this session (default to local)
+                machine_id = self._session_machines.get(
+                    session_info.session_id, "local"
+                )
+                machine = machine_registry.get(machine_id)
 
                 if tracked is None:
                     # For new sessions, initialize offset to end of file
                     # to avoid re-processing old messages
-                    try:
-                        file_size = session_info.file_path.stat().st_size
-                        current_mtime = session_info.file_path.stat().st_mtime
-                    except OSError:
-                        file_size = 0
-                        current_mtime = 0.0
+                    file_size = await machine.file_size(
+                        str(session_info.file_path)
+                    ) or 0
                     tracked = TrackedSession(
                         session_id=session_info.session_id,
                         file_path=str(session_info.file_path),
                         last_byte_offset=file_size,
+                        machine_id=machine_id,
                     )
                     self.state.update_session(tracked)
-                    self._file_mtimes[session_info.session_id] = current_mtime
+                    self._file_mtimes[session_info.session_id] = 0.0
                     logger.info(f"Started tracking session: {session_info.session_id}")
                     continue
 
-                # Check mtime + file size to see if file has changed
-                try:
-                    st = session_info.file_path.stat()
-                    current_mtime = st.st_mtime
-                    current_size = st.st_size
-                except OSError:
+                # Check file size to see if file has changed.
+                # For local files, also check mtime as a fast-path optimization.
+                current_size = await machine.file_size(str(session_info.file_path))
+                if current_size is None:
                     continue
+
+                try:
+                    current_mtime = session_info.file_path.stat().st_mtime
+                except OSError:
+                    current_mtime = 0.0
 
                 last_mtime = self._file_mtimes.get(session_info.session_id, 0.0)
                 if (
@@ -375,11 +404,14 @@ class SessionMonitor:
     async def _load_current_session_map(self) -> dict[str, str]:
         """Load current session_map and return window_key -> session_id mapping.
 
-        Keys in session_map are formatted as "tmux_session:window_id"
-        (e.g. "ccbot:@12"). Old-format keys ("ccbot:window_name") are also
-        accepted so that sessions running before a code upgrade continue
-        to be monitored until the hook re-fires with new format.
-        Only entries matching our tmux_session_name are processed.
+        Handles two key formats:
+        - Local entries: "tmux_session_name:window_id" (e.g. "ccbot:@12").
+          Old-format keys ("ccbot:window_name") are also accepted.
+        - Remote entries: "machine_id:window_id" (e.g. "fedora:@3").
+          These are entries where the prefix is NOT the local tmux_session_name.
+
+        Populates self._session_machines with machine_id for remote sessions
+        so that TrackedSession objects can be seeded with the correct machine.
         """
         window_to_session: dict[str, str] = {}
         if config.session_map_file.exists():
@@ -387,15 +419,24 @@ class SessionMonitor:
                 async with aiofiles.open(config.session_map_file, "r") as f:
                     content = await f.read()
                 session_map = json.loads(content)
-                prefix = f"{config.tmux_session_name}:"
+                local_prefix = f"{config.tmux_session_name}:"
                 for key, info in session_map.items():
-                    # Only process entries for our tmux session
-                    if not key.startswith(prefix):
-                        continue
-                    window_key = key[len(prefix) :]
                     session_id = info.get("session_id", "")
-                    if session_id:
+                    if not session_id:
+                        continue
+                    if key.startswith(local_prefix):
+                        # Local entry: strip the tmux session name prefix
+                        window_key = key[len(local_prefix) :]
                         window_to_session[window_key] = session_id
+                    else:
+                        # Remote entry: prefix is the machine_id
+                        colon_pos = key.find(":")
+                        if colon_pos < 0:
+                            continue
+                        machine_id = key[:colon_pos]
+                        window_key = key[colon_pos + 1 :]
+                        window_to_session[window_key] = session_id
+                        self._session_machines[session_id] = machine_id
             except (json.JSONDecodeError, OSError):
                 pass
         return window_to_session
