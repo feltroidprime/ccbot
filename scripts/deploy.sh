@@ -76,16 +76,15 @@ bold "==> Pushing to ${REMOTE}/${BRANCH}"
 git push "$REMOTE" "$BRANCH"
 green "    Pushed."
 
-# --- Step 2: Upgrade local ---
-bold "==> Upgrading local ccbot"
-if uv tool upgrade ccbot >/dev/null 2>&1; then
-    green "    ✓"
-else
-    red "    ✗ (local upgrade failed)"
-fi
+# --- Step 2: Upgrade ccbot (local + bot host first, so --headless flag exists) ---
+bold "==> Upgrading ccbot"
+printf "    %-12s " "local"
+if uv tool upgrade ccbot >/dev/null 2>&1; then green "✓"; else red "✗"; fi
+printf "    %-12s " "bot host"
+if ssh_cmd "${SSH_USER}@${BOT_HOST}" "bash -lc 'uv tool upgrade ccbot'" >/dev/null 2>&1; then green "✓"; else red "✗"; fi
 
-# --- Step 3: Run ccbot setup on bot host (upgrades all machines) ---
-bold "==> Running ccbot setup --headless on ${BOT_HOST}"
+# --- Step 3: Run ccbot setup --headless on bot host (upgrades remaining machines) ---
+bold "==> Running ccbot setup --headless on bot host"
 ssh_cmd "${SSH_USER}@${BOT_HOST}" "bash -lc 'ccbot setup --headless'" 2>&1 | sed 's/^/    /'
 
 # --- Step 4: Restart bot ---
