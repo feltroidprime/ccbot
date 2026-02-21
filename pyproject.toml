@@ -61,3 +61,8 @@ exclude_lines = [
     "if __name__ == .__main__.",
     "logger\\.",
 ]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+]
