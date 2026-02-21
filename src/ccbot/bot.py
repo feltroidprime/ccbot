@@ -149,6 +149,46 @@ def is_user_allowed(user_id: int | None) -> bool:
     return user_id is not None and config.is_user_allowed(user_id)
 
 
+async def _on_remote_hook(payload: dict) -> None:
+    """Handle a SessionStart hook POST from a remote machine.
+
+    Receives hook payloads POSTed by remote 'ccbot hook --remote' calls.
+    Writes the session info to local session_map.json keyed as
+    "machine_id:window_id" so SessionMonitor picks it up on the next
+    poll cycle.
+    """
+    import json as _json
+
+    machine_id = payload.get("machine_id", "")
+    window_id = payload.get("window_id", "")
+    session_id = payload.get("session_id", "")
+    cwd = payload.get("cwd", "")
+    window_name = payload.get("window_name", "")
+
+    if not (machine_id and window_id and session_id):
+        logger.warning("Incomplete remote hook payload: %s", payload)
+        return
+
+    key = f"{machine_id}:{window_id}"
+    session_map: dict = {}
+    if config.session_map_file.exists():
+        try:
+            session_map = _json.loads(config.session_map_file.read_text())
+        except (Exception,):
+            pass
+
+    session_map[key] = {
+        "session_id": session_id,
+        "cwd": cwd,
+        "window_name": window_name,
+        "machine": machine_id,
+    }
+    from .utils import atomic_write_json
+
+    atomic_write_json(config.session_map_file, session_map)
+    logger.info("Remote hook: wrote session_map[%s] -> session=%s", key, session_id)
+
+
 def _get_thread_id(update: Update) -> int | None:
     """Extract thread_id from an update, returning None if not in a named topic."""
     msg = update.message or (
@@ -1555,6 +1595,16 @@ async def post_init(application: Application) -> None:
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
+    from .hook_server import start_hook_server
+    from .machines import machine_registry
+
+    hook_runner = await start_hook_server(
+        on_hook=_on_remote_hook,
+        port=machine_registry.hook_port,
+    )
+    application.bot_data["hook_runner"] = hook_runner
+    logger.info("Hook HTTP server started on port %d", machine_registry.hook_port)
+
 
 async def post_shutdown(application: Application) -> None:
     global _status_poll_task
@@ -1575,6 +1625,11 @@ async def post_shutdown(application: Application) -> None:
     if session_monitor:
         session_monitor.stop()
         logger.info("Session monitor stopped")
+
+    runner = application.bot_data.get("hook_runner")
+    if runner:
+        await runner.cleanup()
+        logger.info("Hook HTTP server stopped")
 
 
 def create_bot() -> Application:
