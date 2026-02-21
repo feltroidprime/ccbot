@@ -1,12 +1,14 @@
 """Interactive fleet setup — discovers Tailscale peers, configures machines.json, and provisions each machine.
 
+Idempotent: every step checks current state before acting, so re-running is always safe.
+
 Responsibilities:
   - Query Tailscale for available peers via `tailscale status --json`.
   - Present a checkbox TUI (prompt_toolkit) for machine selection.
   - Collect SSH user and display name for each remote machine.
   - Write machines.json to the ccbot config directory.
-  - Provision each machine: SSH connectivity check, uv install, hook install,
-    endpoint reachability verification.
+  - Provision each machine: SSH check, ccbot install (skip if present), hook install
+    (skip if present), endpoint reachability verification.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from .utils import ccbot_dir, atomic_write_json
 
 logger = logging.getLogger(__name__)
 HOOK_DEFAULT_PORT = 8080
+GITHUB_REPO = "https://github.com/feltroidprime/ccbot"
 
 
 @dataclass
@@ -70,24 +73,6 @@ def _get_tailscale_self_hostname() -> str:
     return socket.gethostname()
 
 
-def _detect_github_url() -> str:
-    """Auto-detect GitHub repo URL from local git remote (tries 'fork' then 'origin')."""
-    repo_root = str(Path(__file__).parent.parent.parent)
-    for remote in ("fork", "origin"):
-        try:
-            result = subprocess.run(
-                ["git", "remote", "get-url", remote],
-                capture_output=True,
-                text=True,
-                cwd=repo_root,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except Exception:
-            continue
-    return ""
-
-
 def _load_existing_machines(machines_file: Path) -> dict:  # type: ignore[type-arg]
     if machines_file.exists():
         try:
@@ -118,8 +103,24 @@ def _ssh_check(user: str, host: str) -> bool:
         return False
 
 
-def _uv_install_remote(user: str, host: str, github_url: str) -> bool:
-    cmd = f"uv tool install 'ccbot @ git+{github_url}' --force 2>&1"
+def _remote_ccbot_version(user: str, host: str) -> str | None:
+    """Return ccbot version string if installed on remote, else None."""
+    try:
+        result = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", f"{user}@{host}", "ccbot --version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _uv_install_remote(user: str, host: str) -> bool:
+    cmd = f"uv tool install 'ccbot @ git+{GITHUB_REPO}' --force 2>&1"
     try:
         result = subprocess.run(
             ["ssh", f"{user}@{host}", cmd], capture_output=True, text=True, timeout=120
@@ -163,29 +164,16 @@ def _install_hook_local() -> bool:
         return False
 
 
-def setup_main(target_machine: str | None = None, repo_url: str | None = None) -> None:
+def setup_main(target_machine: str | None = None) -> None:
     """Run the ccbot setup TUI.
 
     Args:
         target_machine: If set, skip TUI and target this single machine hostname.
-        repo_url: GitHub repo URL for uv install. Auto-detected if not provided.
     """
     config_dir = ccbot_dir()
     machines_file = config_dir / "machines.json"
     existing = _load_existing_machines(machines_file)
     existing_machines = existing.get("machines", {})
-
-    # Detect GitHub URL for uv install
-    github_url = repo_url or _detect_github_url()
-    if not github_url:
-        print("Warning: could not detect GitHub URL from git remote")
-        try:
-            github_url = prompt(
-                "GitHub repo URL (e.g. https://github.com/user/ccbot): "
-            ).strip()
-        except (KeyboardInterrupt, EOFError):
-            print("\nCancelled.")
-            sys.exit(0)
 
     local_hostname = _get_tailscale_self_hostname()
     hook_port = existing.get("hook_port", HOOK_DEFAULT_PORT)
@@ -276,13 +264,15 @@ def setup_main(target_machine: str | None = None, repo_url: str | None = None) -
     atomic_write_json(machines_file, new_config)
     print(f"\nWrote {machines_file}\n")
 
-    # --- Per-machine provisioning ---
+    # --- Per-machine provisioning (idempotent: check before act) ---
     hook_url_base = f"http://{local_hostname}:{hook_port}" if local_hostname else ""
     results: list[MachineSetupResult] = []
 
     for machine_id, cfg in machines_config.items():
+        print(f"\n[{machine_id}]")
+
         if cfg.get("type") == "local":
-            print(f"[{machine_id}] Installing local hook...", end=" ", flush=True)
+            print("  hook ............. ", end="", flush=True)
             ok = _install_hook_local()
             r = MachineSetupResult(machine_id=machine_id, success=ok)
             if not ok:
@@ -295,7 +285,8 @@ def setup_main(target_machine: str | None = None, repo_url: str | None = None) -
         user = cfg["user"]
         r = MachineSetupResult(machine_id=machine_id, success=True)
 
-        print(f"[{machine_id}] Checking SSH connectivity...", end=" ", flush=True)
+        # SSH
+        print("  ssh .............. ", end="", flush=True)
         if not _ssh_check(user, host):
             r.success = False
             r.errors.append(f"SSH failed — run: ssh-copy-id {user}@{host}")
@@ -304,37 +295,41 @@ def setup_main(target_machine: str | None = None, repo_url: str | None = None) -
             continue
         print("✓")
 
-        print(f"[{machine_id}] Installing ccbot via uv...", end=" ", flush=True)
-        if not _uv_install_remote(user, host, github_url):
-            r.success = False
-            r.errors.append("uv tool install failed")
-            print("✗")
+        # ccbot: check if installed, install if missing
+        print("  ccbot ............ ", end="", flush=True)
+        version = _remote_ccbot_version(user, host)
+        if version:
+            print(f"✓ (found: {version})")
         else:
-            print("✓")
+            print("missing, installing...", end=" ", flush=True)
+            if _uv_install_remote(user, host):
+                print("✓")
+            else:
+                r.success = False
+                r.errors.append(
+                    f"Install failed — run on remote: uv tool install 'ccbot @ git+{GITHUB_REPO}'"
+                )
+                print("✗")
 
+        # Hook
         if hook_url_base:
             hook_url = f"{hook_url_base}/hook"
-            print(
-                f"[{machine_id}] Installing hook (--remote {hook_url})...",
-                end=" ",
-                flush=True,
-            )
-            if not _install_hook_remote(user, host, hook_url, machine_id):
+            print("  hook ............. ", end="", flush=True)
+            if _install_hook_remote(user, host, hook_url, machine_id):
+                print("✓")
+            else:
                 r.success = False
                 r.errors.append("Hook install failed on remote")
                 print("✗")
-            else:
-                print("✓")
 
+            # Endpoint
             health_url = f"{hook_url_base}/health"
-            print(
-                f"[{machine_id}] Verifying endpoint reachable...", end=" ", flush=True
-            )
-            if not _check_endpoint_reachable(user, host, health_url):
-                r.errors.append(f"Endpoint {health_url} not reachable from {host}")
-                print("✗ (warning only)")
-            else:
+            print("  endpoint ......... ", end="", flush=True)
+            if _check_endpoint_reachable(user, host, health_url):
                 print("✓")
+            else:
+                r.errors.append(f"Endpoint {health_url} not reachable from {host}")
+                print("✗ (warning)")
 
         results.append(r)
 
