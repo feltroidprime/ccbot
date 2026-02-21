@@ -32,6 +32,7 @@ Key functions: create_bot(), handle_new_message().
 
 import asyncio
 import io
+import json
 import logging
 import time
 from pathlib import Path
@@ -133,8 +134,8 @@ from .handlers.status_polling import status_poll_loop
 from .screenshot import text_to_image
 from .session import WindowBinding, session_manager
 from .session_monitor import NewMessage, SessionMonitor
-from .terminal_parser import extract_bash_output
-from .utils import ccbot_dir
+from .terminal_parser import extract_bash_output, parse_usage_output
+from .utils import atomic_write_json, ccbot_dir
 
 logger = logging.getLogger(__name__)
 
@@ -182,8 +183,6 @@ async def _on_remote_hook(payload: dict) -> None:
     "machine_id:window_id" so SessionMonitor picks it up on the next
     poll cycle.
     """
-    import json as _json
-
     machine_id = payload.get("machine_id", "")
     window_id = payload.get("window_id", "")
     session_id = payload.get("session_id", "")
@@ -198,8 +197,8 @@ async def _on_remote_hook(payload: dict) -> None:
     session_map: dict = {}
     if config.session_map_file.exists():
         try:
-            session_map = _json.loads(config.session_map_file.read_text())
-        except (Exception,):
+            session_map = json.loads(config.session_map_file.read_text())
+        except Exception:
             pass
 
     session_map[key] = {
@@ -208,8 +207,6 @@ async def _on_remote_hook(payload: dict) -> None:
         "window_name": window_name,
         "machine": machine_id,
     }
-    from .utils import atomic_write_json
-
     atomic_write_json(config.session_map_file, session_map)
     logger.info("Remote hook: wrote session_map[%s] -> session=%s", key, session_id)
 
@@ -221,14 +218,14 @@ def _get_thread_id(update: Update) -> int | None:
     )
     if msg is None:
         return None
-    tid = getattr(msg, "message_thread_id", None)
+    tid: int | None = getattr(msg, "message_thread_id", None)
     if tid is None or tid == 1:
         return None
     return tid
 
 
 def _get_user_data_str(user_data: dict | None, key: str, default: str) -> str:
-    """Get a string value from user_data, returning default if missing or None."""
+    """Get a string value from user_data, returning default if missing."""
     if user_data is None:
         return default
     return user_data.get(key, default)
@@ -326,15 +323,15 @@ async def screenshot_command(
     resolved = await _resolve_bound_window(user.id, thread_id, update.message)
     if not resolved:
         return
-    ss_binding, ss_machine, w = resolved
+    binding, machine, w = resolved
 
-    text = await ss_machine.capture_pane(w.window_id, with_ansi=True)
+    text = await machine.capture_pane(w.window_id, with_ansi=True)
     if not text:
         await safe_reply(update.message, "❌ Failed to capture pane content.")
         return
 
     png_bytes = await text_to_image(text, with_ansi=True)
-    keyboard = _build_screenshot_keyboard(ss_binding.window_id)
+    keyboard = _build_screenshot_keyboard(binding.window_id)
     await update.message.reply_document(
         document=io.BytesIO(png_bytes),
         filename="screenshot.png",
@@ -384,10 +381,10 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     resolved = await _resolve_bound_window(user.id, thread_id, update.message)
     if not resolved:
         return
-    _binding, esc_machine, w = resolved
+    _binding, machine, w = resolved
 
     # Send Escape control character (no enter)
-    await esc_machine.send_keys(w.window_id, "\x1b", enter=False)
+    await machine.send_keys(w.window_id, "\x1b", enter=False)
     await safe_reply(update.message, "⎋ Sent Escape")
 
 
@@ -403,24 +400,22 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     resolved = await _resolve_bound_window(user.id, thread_id, update.message)
     if not resolved:
         return
-    _binding, usage_machine, w = resolved
+    _binding, machine, w = resolved
 
     # Send /usage command to Claude Code TUI
-    await usage_machine.send_keys(w.window_id, "/usage")
+    await machine.send_keys(w.window_id, "/usage")
     # Wait for the modal to render
     await asyncio.sleep(2.0)
     # Capture the pane content
-    pane_text = await usage_machine.capture_pane(w.window_id)
+    pane_text = await machine.capture_pane(w.window_id)
     # Dismiss the modal
-    await usage_machine.send_keys(w.window_id, "Escape", enter=False, literal=False)
+    await machine.send_keys(w.window_id, "Escape", enter=False, literal=False)
 
     if not pane_text:
         await safe_reply(update.message, "Failed to capture usage info.")
         return
 
     # Try to parse structured usage info
-    from .terminal_parser import parse_usage_output
-
     usage = parse_usage_output(pane_text)
     if usage and usage.parsed_lines:
         text = "\n".join(usage.parsed_lines)
@@ -1276,16 +1271,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             if not send_ok:
                 logger.warning("Failed to forward pending text: %s", send_msg)
-                if pending_thread_id is not None:
-                    resolved_chat = session_manager.resolve_chat_id(
-                        user.id, pending_thread_id
-                    )
-                    await safe_send(
-                        context.bot,
-                        resolved_chat,
-                        f"❌ Failed to send pending message: {send_msg}",
-                        message_thread_id=pending_thread_id,
-                    )
+                resolved_chat = session_manager.resolve_chat_id(
+                    user.id, pending_thread_id
+                )
+                await safe_send(
+                    context.bot,
+                    resolved_chat,
+                    f"❌ Failed to send pending message: {send_msg}",
+                    message_thread_id=pending_thread_id,
+                )
         elif context.user_data is not None:
             context.user_data.pop("_pending_thread_id", None)
 

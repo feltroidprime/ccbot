@@ -37,23 +37,18 @@ _HOOK_COMMAND_SUFFIX = "ccbot hook"
 def _find_ccbot_path() -> str:
     """Find the full path to the ccbot executable.
 
-    Priority:
-    1. shutil.which("ccbot") - if ccbot is in PATH
-    2. Same directory as the Python interpreter (for venv installs)
+    Checks PATH first, then the Python interpreter's directory (venv installs),
+    and falls back to bare "ccbot" as last resort.
     """
-    # Try PATH first
     ccbot_path = shutil.which("ccbot")
     if ccbot_path:
         return ccbot_path
 
-    # Fall back to the directory containing the Python interpreter
-    # This handles the case where ccbot is installed in a venv
-    python_dir = Path(sys.executable).parent
-    ccbot_in_venv = python_dir / "ccbot"
+    # Venv fallback: ccbot binary next to the Python interpreter
+    ccbot_in_venv = Path(sys.executable).parent / "ccbot"
     if ccbot_in_venv.exists():
         return str(ccbot_in_venv)
 
-    # Last resort: assume it will be in PATH
     return "ccbot"
 
 
@@ -143,15 +138,12 @@ def _install_hook(remote_url: str | None = None, machine_id: str | None = None) 
         print(f"Hook already installed in {settings_file}")
         return 0
 
-    # Find the full path to ccbot
     ccbot_path = _find_ccbot_path()
+    hook_command = f"{ccbot_path} hook"
     if remote_url:
-        mid = machine_id or ""
-        hook_command = f"{ccbot_path} hook --remote {remote_url}" + (
-            f" --machine-id {mid}" if mid else ""
-        )
-    else:
-        hook_command = f"{ccbot_path} hook"
+        hook_command += f" --remote {remote_url}"
+        if machine_id:
+            hook_command += f" --machine-id {machine_id}"
     hook_config = {"type": "command", "command": hook_command, "timeout": 5}
     logger.info("Installing hook command: %s", hook_command)
 

@@ -90,16 +90,12 @@ def get_or_create_queue(bot: Bot, user_id: int) -> asyncio.Queue[MessageTask]:
     return _message_queues[user_id]
 
 
-def _inspect_queue(queue: asyncio.Queue[MessageTask]) -> list[MessageTask]:
-    """Non-destructively inspect all items in queue.
-
-    Drains the queue and returns all items. Caller must refill.
-    """
+def _drain_queue(queue: asyncio.Queue[MessageTask]) -> list[MessageTask]:
+    """Drain all items from queue and return them. Caller must refill remaining."""
     items: list[MessageTask] = []
     while not queue.empty():
         try:
-            item = queue.get_nowait()
-            items.append(item)
+            items.append(queue.get_nowait())
         except asyncio.QueueEmpty:
             break
     return items
@@ -142,7 +138,7 @@ async def _merge_content_tasks(
     merge_count = 0
 
     async with lock:
-        items = _inspect_queue(queue)
+        items = _drain_queue(queue)
         remaining: list[MessageTask] = []
 
         for i, task in enumerate(items):

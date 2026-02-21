@@ -230,10 +230,9 @@ def _approximate_256_color(idx: int) -> tuple[int, int, int]:
         g = ((idx % 36) // 6) * 51
         b = (idx % 6) * 51
         return (r, g, b)
-    else:
-        # Grayscale: 232-255
-        gray = 8 + (idx - 232) * 10
-        return (gray, gray, gray)
+    # Grayscale: 232-255
+    gray = 8 + (idx - 232) * 10
+    return (gray, gray, gray)
 
 
 def _split_line_segments_plain(line: str) -> list[tuple[str, int]]:

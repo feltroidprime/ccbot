@@ -109,7 +109,7 @@ _RE_PROGRESS_BAR = re.compile(r"^[\u2580-\u259f\s]+")
 def _is_chrome_separator(line: str) -> bool:
     """Check if a line is a Claude Code chrome separator (20+ ─ characters)."""
     stripped = line.strip()
-    return len(stripped) >= 20 and all(c == "─" for c in stripped)
+    return len(stripped) >= 20 and stripped == "─" * len(stripped)
 
 
 def _shorten_separators(text: str) -> str:

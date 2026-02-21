@@ -426,9 +426,7 @@ class MachineRegistry:
 
     def get(self, machine_id: str) -> MachineConnection:
         """Return machine by ID; fall back to local machine if not found."""
-        if machine_id in self._machines:
-            return self._machines[machine_id]
-        return self._machines[self._local_machine_id]
+        return self._machines.get(machine_id, self._machines[self._local_machine_id])
 
     def all(self) -> list[MachineConnection]:
         """Return list of all configured machines."""

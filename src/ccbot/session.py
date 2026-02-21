@@ -652,25 +652,23 @@ class SessionManager:
             else:
                 return None
 
-        # Single pass: read file once, extract summary + count messages
+        # Single pass: extract summary + count messages
         summary = ""
         last_user_msg = ""
         message_count = 0
         try:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                async for line in f:
-                    line = line.strip()
-                    if not line:
+                async for raw_line in f:
+                    stripped = raw_line.strip()
+                    if not stripped:
                         continue
                     message_count += 1
                     try:
-                        data = json.loads(line)
-                        # Check for summary
+                        data = json.loads(stripped)
                         if data.get("type") == "summary":
                             s = data.get("summary", "")
                             if s:
                                 summary = s
-                        # Track last user message as fallback
                         elif TranscriptParser.is_user_message(data):
                             parsed = TranscriptParser.parse_message(data)
                             if parsed and parsed.text.strip():
@@ -757,15 +755,16 @@ class SessionManager:
             window_id=window_id, machine=machine, dangerous=dangerous
         )
         self.thread_bindings[user_id][thread_id] = binding
-        key = binding.make_key()
         if window_name:
             self.window_display_names[window_id] = window_name
         self._save_state()
+        display = window_name or binding.make_key()
         logger.info(
-            "Bound thread %d -> %s (%s) for user %d [dangerous=%s]",
+            "Bound thread %d -> %s:%s (%s) for user %d [dangerous=%s]",
             thread_id,
-            key,
-            window_name or key,
+            machine,
+            window_id,
+            display,
             user_id,
             dangerous,
         )
@@ -908,7 +907,7 @@ class SessionManager:
             return [], 0
 
         parsed_entries, _ = TranscriptParser.parse_entries(entries)
-        all_messages = [
+        messages = [
             {
                 "role": e.role,
                 "text": e.text,
@@ -918,7 +917,7 @@ class SessionManager:
             for e in parsed_entries
         ]
 
-        return all_messages, len(all_messages)
+        return messages, len(messages)
 
 
 session_manager = SessionManager()

@@ -50,40 +50,23 @@ def build_response_parts(
         elif len(text) > max_thinking:
             text = text[:max_thinking] + "\n\n… (thinking truncated)"
 
-    # Format based on content type
-    if content_type == "thinking":
-        # Thinking: prefix with "∴ Thinking…" and single newline
-        prefix = "∴ Thinking…"
-        separator = "\n"
-    else:
-        # Plain text: no prefix
-        prefix = ""
-        separator = ""
+    # Thinking content gets a prefix header
+    header = "∴ Thinking…\n" if content_type == "thinking" else ""
 
-    # If text contains expandable quote sentinels, don't split —
+    # If text contains expandable quote sentinels, don't split --
     # the quote must stay atomic. Truncation is handled by
     # _render_expandable_quote in markdown_v2.py.
     if TranscriptParser.EXPANDABLE_QUOTE_START in text:
-        if prefix:
-            return [f"{prefix}{separator}{text}"]
-        return [text]
+        return [f"{header}{text}"]
 
-    # Split first, then assemble each chunk.
-    # Use conservative max to leave room for MarkdownV2 expansion at send layer.
-    max_text = 3000 - len(prefix) - len(separator)
-
+    # Split, leaving room for MarkdownV2 expansion at send layer
+    max_text = 3000 - len(header)
     text_chunks = split_message(text, max_length=max_text)
     total = len(text_chunks)
 
     if total == 1:
-        if prefix:
-            return [f"{prefix}{separator}{text_chunks[0]}"]
-        return [text_chunks[0]]
+        return [f"{header}{text_chunks[0]}"]
 
-    parts = []
-    for i, chunk in enumerate(text_chunks, 1):
-        if prefix:
-            parts.append(f"{prefix}{separator}{chunk}\n\n[{i}/{total}]")
-        else:
-            parts.append(f"{chunk}\n\n[{i}/{total}]")
-    return parts
+    return [
+        f"{header}{chunk}\n\n[{i}/{total}]" for i, chunk in enumerate(text_chunks, 1)
+    ]

@@ -448,10 +448,9 @@ class SessionMonitor:
         current_map = await self._load_current_session_map()
         active_session_ids = set(current_map.values())
 
-        stale_sessions = []
-        for session_id in self.state.tracked_sessions.keys():
-            if session_id not in active_session_ids:
-                stale_sessions.append(session_id)
+        stale_sessions = [
+            sid for sid in self.state.tracked_sessions if sid not in active_session_ids
+        ]
 
         if stale_sessions:
             logger.info(
@@ -469,13 +468,20 @@ class SessionMonitor:
         Returns current session_map for further processing.
         """
         current_map = await self._load_current_session_map()
-
         sessions_to_remove: set[str] = set()
 
-        # Check for window session changes (window exists in both, but session_id changed)
         for window_id, old_session_id in self._last_session_map.items():
             new_session_id = current_map.get(window_id)
-            if new_session_id and new_session_id != old_session_id:
+            if new_session_id is None:
+                # Window deleted
+                logger.info(
+                    "Window '%s' deleted, removing session %s",
+                    window_id,
+                    old_session_id,
+                )
+                sessions_to_remove.add(old_session_id)
+            elif new_session_id != old_session_id:
+                # Session changed (e.g. after /clear)
                 logger.info(
                     "Window '%s' session changed: %s -> %s",
                     window_id,
@@ -484,30 +490,13 @@ class SessionMonitor:
                 )
                 sessions_to_remove.add(old_session_id)
 
-        # Check for deleted windows (window in old map but not in current)
-        old_windows = set(self._last_session_map.keys())
-        current_windows = set(current_map.keys())
-        deleted_windows = old_windows - current_windows
-
-        for window_id in deleted_windows:
-            old_session_id = self._last_session_map[window_id]
-            logger.info(
-                "Window '%s' deleted, removing session %s",
-                window_id,
-                old_session_id,
-            )
-            sessions_to_remove.add(old_session_id)
-
-        # Perform cleanup
         if sessions_to_remove:
             for session_id in sessions_to_remove:
                 self.state.remove_session(session_id)
                 self._file_mtimes.pop(session_id, None)
             self.state.save_if_dirty()
 
-        # Update last known map
         self._last_session_map = current_map
-
         return current_map
 
     async def _monitor_loop(self) -> None:

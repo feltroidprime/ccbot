@@ -37,7 +37,7 @@ class Config:
             load_dotenv(global_env)
             logger.debug("Loaded env from %s", global_env)
 
-        self.telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN") or ""
+        self.telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
         if not self.telegram_bot_token:
             raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
 

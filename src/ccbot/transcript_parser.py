@@ -164,6 +164,22 @@ class TranscriptParser:
             result_lines.append(line.rstrip("\n"))
         return "\n".join(result_lines)
 
+    # Tool name -> input key(s) for summary extraction.
+    # Each entry is a tuple of keys to try in order; first non-empty wins.
+    _TOOL_SUMMARY_KEYS: dict[str, tuple[str, ...]] = {
+        "Read": ("file_path", "pattern"),
+        "Glob": ("file_path", "pattern"),
+        "Write": ("file_path",),
+        "Edit": ("file_path", "notebook_path"),
+        "NotebookEdit": ("file_path", "notebook_path"),
+        "Bash": ("command",),
+        "Grep": ("pattern",),
+        "Task": ("description",),
+        "WebFetch": ("url",),
+        "WebSearch": ("query",),
+        "Skill": ("skill",),
+    }
+
     @classmethod
     def format_tool_use_summary(cls, name: str, input_data: dict | Any) -> str:
         """Format a tool_use block into a brief summary line.
@@ -178,43 +194,26 @@ class TranscriptParser:
         if not isinstance(input_data, dict):
             return f"**{name}**"
 
-        # Pick a meaningful short summary based on tool name
         summary = ""
-        if name in ("Read", "Glob"):
-            summary = input_data.get("file_path") or input_data.get("pattern", "")
-        elif name == "Write":
-            summary = input_data.get("file_path", "")
-        elif name in ("Edit", "NotebookEdit"):
-            summary = input_data.get("file_path") or input_data.get("notebook_path", "")
-            # Note: Edit/Update diff and stats are generated in tool_result stage,
-            # not here. We just show the tool name and file path.
-        elif name == "Bash":
-            summary = input_data.get("command", "")
-        elif name == "Grep":
-            summary = input_data.get("pattern", "")
-        elif name == "Task":
-            summary = input_data.get("description", "")
-        elif name == "WebFetch":
-            summary = input_data.get("url", "")
-        elif name == "WebSearch":
-            summary = input_data.get("query", "")
+
+        # Check the key-based lookup table first
+        keys = cls._TOOL_SUMMARY_KEYS.get(name)
+        if keys:
+            for key in keys:
+                summary = input_data.get(key, "")
+                if summary:
+                    break
         elif name == "TodoWrite":
             todos = input_data.get("todos", [])
             if isinstance(todos, list):
                 summary = f"{len(todos)} item(s)"
-        elif name == "TodoRead":
-            summary = ""
         elif name == "AskUserQuestion":
             questions = input_data.get("questions", [])
             if isinstance(questions, list) and questions:
                 q = questions[0]
                 if isinstance(q, dict):
                     summary = q.get("question", "")
-        elif name == "ExitPlanMode":
-            summary = ""
-        elif name == "Skill":
-            summary = input_data.get("skill", "")
-        else:
+        elif name not in ("TodoRead", "ExitPlanMode"):
             # Generic: show first string value
             for v in input_data.values():
                 if isinstance(v, str) and v:
@@ -349,7 +348,7 @@ class TranscriptParser:
 
         Shows relevant statistics for each tool type, with expandable quote for full content.
 
-        No truncation here — per project principles, truncation is handled
+        No truncation here -- per project principles, truncation is handled
         only at the send layer (split_message / _render_expandable_quote).
         """
         if not text:
@@ -357,14 +356,14 @@ class TranscriptParser:
 
         line_count = text.count("\n") + 1
 
-        def _nonempty_line_count() -> int:
-            return sum(1 for line in text.split("\n") if line.strip())
-
         # Read/Write: stats only, no expandable quote
         if tool_name == "Read":
             return f"  ⎿  Read {line_count} lines"
         if tool_name == "Write":
             return f"  ⎿  Wrote {line_count} lines"
+
+        def _nonempty_line_count() -> int:
+            return sum(1 for line in text.split("\n") if line.strip())
 
         # Compute stats line based on tool type
         stats: str | None = None
@@ -442,16 +441,9 @@ class TranscriptParser:
                 if parsed.message_type == "local_command":
                     cmd = parsed.tool_name or last_cmd_name or ""
                     text = parsed.text
-                    if cmd:
-                        if "\n" in text:
-                            formatted = f"❯ `{cmd}`\n```\n{text}\n```"
-                        else:
-                            formatted = f"❯ `{cmd}`\n`{text}`"
-                    else:
-                        if "\n" in text:
-                            formatted = f"```\n{text}\n```"
-                        else:
-                            formatted = f"`{text}`"
+                    multiline = "\n" in text
+                    code = f"```\n{text}\n```" if multiline else f"`{text}`"
+                    formatted = f"❯ `{cmd}`\n{code}" if cmd else code
                     result.append(
                         ParsedEntry(
                             role="assistant",
