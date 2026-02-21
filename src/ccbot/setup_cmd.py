@@ -71,17 +71,21 @@ def _get_tailscale_self_hostname() -> str:
 
 
 def _detect_github_url() -> str:
-    """Auto-detect GitHub repo URL from local git remote origin."""
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            cwd=str(Path(__file__).parent.parent.parent),  # repo root
-        )
-        return result.stdout.strip()
-    except Exception:
-        return ""
+    """Auto-detect GitHub repo URL from local git remote (tries 'fork' then 'origin')."""
+    repo_root = str(Path(__file__).parent.parent.parent)
+    for remote in ("fork", "origin"):
+        try:
+            result = subprocess.run(
+                ["git", "remote", "get-url", remote],
+                capture_output=True,
+                text=True,
+                cwd=repo_root,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception:
+            continue
+    return ""
 
 
 def _load_existing_machines(machines_file: Path) -> dict:  # type: ignore[type-arg]
@@ -159,11 +163,12 @@ def _install_hook_local() -> bool:
         return False
 
 
-def setup_main(target_machine: str | None = None) -> None:
+def setup_main(target_machine: str | None = None, repo_url: str | None = None) -> None:
     """Run the ccbot setup TUI.
 
     Args:
         target_machine: If set, skip TUI and target this single machine hostname.
+        repo_url: GitHub repo URL for uv install. Auto-detected if not provided.
     """
     config_dir = ccbot_dir()
     machines_file = config_dir / "machines.json"
@@ -171,9 +176,9 @@ def setup_main(target_machine: str | None = None) -> None:
     existing_machines = existing.get("machines", {})
 
     # Detect GitHub URL for uv install
-    github_url = _detect_github_url()
+    github_url = repo_url or _detect_github_url()
     if not github_url:
-        print("Warning: could not detect GitHub URL from git remote origin")
+        print("Warning: could not detect GitHub URL from git remote")
         try:
             github_url = prompt(
                 "GitHub repo URL (e.g. https://github.com/user/ccbot): "

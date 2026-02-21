@@ -30,10 +30,16 @@ def main() -> None:
             metavar="HOSTNAME",
             help="Target a single machine by hostname (skips TUI)",
         )
+        p.add_argument(
+            "--repo",
+            default=None,
+            metavar="URL",
+            help="GitHub repo URL for uv install (auto-detected if omitted)",
+        )
         args = p.parse_args(sys.argv[2:])
         from .setup_cmd import setup_main
 
-        setup_main(target_machine=args.machine)
+        setup_main(target_machine=args.machine, repo_url=args.repo)
         return
 
     logging.basicConfig(
