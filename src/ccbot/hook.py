@@ -112,7 +112,9 @@ def _uninstall_hook() -> int:
     ]
     settings["hooks"]["SessionStart"] = new_entries
     try:
-        settings_file.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+        settings_file.write_text(
+            json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
+        )
     except OSError as e:
         print(f"Error writing {settings_file}: {e}", file=sys.stderr)
         return 1
@@ -239,7 +241,9 @@ def hook_main() -> None:
         sys.exit(_uninstall_hook())
     if args.install:
         logger.info("Hook install requested")
-        sys.exit(_install_hook(remote_url=args.remote, machine_id=args.machine_id or None))
+        sys.exit(
+            _install_hook(remote_url=args.remote, machine_id=args.machine_id or None)
+        )
 
     # Normal hook processing: read JSON from stdin
     logger.debug("Processing hook event from stdin")

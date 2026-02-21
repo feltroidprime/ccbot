@@ -217,7 +217,9 @@ def build_permissions_picker(
     buttons: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton("Normal", callback_data=CB_PERM_NORMAL),
-            InlineKeyboardButton("Skip permissions ⚡", callback_data=CB_PERM_DANGEROUS),
+            InlineKeyboardButton(
+                "Skip permissions ⚡", callback_data=CB_PERM_DANGEROUS
+            ),
         ]
     ]
     return text, InlineKeyboardMarkup(buttons)

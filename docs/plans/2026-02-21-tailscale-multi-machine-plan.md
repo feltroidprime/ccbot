@@ -1945,3 +1945,132 @@ Task 5 is the most disruptive (changes `thread_bindings` type) — do it in one 
 Tasks 6–8 layer on after Task 5.
 Tasks 9–11 are UI changes.
 Task 12 is standalone.
+
+---
+
+## Manual Smoke Test
+
+These steps verify the feature end-to-end. Run them after deploying to a real bot environment.
+
+### Scenario 1: Local machine only (no Tailscale required)
+
+This verifies that existing single-machine behavior is unchanged after the multi-machine refactor.
+
+```bash
+# 1. Ensure no machines.json exists (or it only lists local)
+ls ~/.ccbot/machines.json   # should be absent or empty list
+
+# 2. Start the bot
+./scripts/restart.sh
+
+# 3. Open Telegram, navigate to your bot's forum group
+# 4. Create a new topic (or use an unbound existing topic)
+# 5. Send any message (e.g. "hello")
+# Expected: machine picker appears with a single button labelled "MacBook" (or your hostname)
+
+# 6. Press the MacBook button
+# Expected: directory browser opens showing your home directory
+
+# 7. Navigate to a project directory and press "Select this directory"
+# Expected: topic renamed to the project directory name
+# Expected: a new tmux window is created locally with Claude Code running
+
+# 8. Send "What files are here?" in the topic
+# Expected: Claude responds listing files from that directory
+
+# 9. Check tmux directly:
+tmux list-windows -t ccbot
+# Expected: a window named after the project appears
+
+# 10. Send /esc in the topic
+# Expected: Escape keystroke sent to Claude's tmux pane (interrupts any running operation)
+```
+
+### Scenario 2: Adding a remote machine manually (without a full Tailscale setup)
+
+Use this approach to test the multi-machine UI flow with a second machine that's reachable by SSH
+(e.g. a VM, another user on localhost, or an actual remote host). Tailscale is not strictly
+required as long as the host is reachable via SSH.
+
+```bash
+# 1. Create or edit ~/.ccbot/machines.json
+# Replace "fedora" and the SSH details with your actual remote host:
+cat > ~/.ccbot/machines.json << 'EOF'
+[
+  {
+    "name": "fedora",
+    "hostname": "192.168.1.42",
+    "username": "felt",
+    "ssh_key": "~/.ssh/id_ed25519",
+    "hook_server_url": "http://192.168.1.1:7842"
+  }
+]
+EOF
+
+# 2. Verify SSH access works without a passphrase prompt:
+ssh -i ~/.ssh/id_ed25519 felt@192.168.1.42 "echo ok"
+# Expected: prints "ok" with no password prompt
+
+# 3. On the remote machine, install ccbot:
+ssh felt@192.168.1.42 "pip install ccbot"
+# Or if ccbot is deployed via uv/git, follow your deployment steps.
+
+# 4. On the remote machine, install the hook (pointing back to the bot host):
+ssh felt@192.168.1.42 "ccbot hook --install --remote http://192.168.1.1:7842 --machine fedora"
+# Expected: ~/.claude/settings.json on the remote machine updated with a SessionStart hook
+
+# 5. Restart the bot on the local machine:
+./scripts/restart.sh
+# Expected: bot starts hook HTTP server on port 7842
+# Expected: RemoteMachine("fedora") connection established
+
+# 6. Open Telegram, send a message in a new unbound topic
+# Expected: machine picker shows [MacBook] [Fedora]
+
+# 7. Select Fedora, navigate to a project directory on the remote machine
+# Expected: directory listing comes from the remote host via SSH
+
+# 8. Select the directory
+# Expected: topic renamed to "[Fedora] project-name"
+# Expected: on the remote machine, a new tmux window is created with Claude Code
+
+# 9. Send a message in the topic
+# Expected: message appears in Claude's tmux window on the remote machine
+# Expected: Claude's response comes back through the hook HTTP server and into Telegram
+
+# 10. Verify on remote:
+ssh felt@192.168.1.42 "tmux list-windows -t ccbot"
+# Expected: a window named after the project
+```
+
+### Scenario 3: Run `ccbot setup` on a Tailscale machine
+
+`ccbot setup` is an interactive TUI wizard that configures a remote machine to participate in
+the Tailscale network and installs the necessary hook.
+
+```bash
+# Prerequisites:
+# - Tailscale installed and running on both machines (tailscale up)
+# - SSH key-based access to the remote machine
+# - ccbot installed on the remote machine
+
+# 1. On the bot host (MacBook), run:
+ccbot setup
+
+# 2. The TUI wizard will prompt for:
+#    - Machine name (label shown in Telegram, e.g. "fedora")
+#    - Hostname or Tailscale IP (e.g. "fedora" or "100.64.0.5")
+#    - SSH username
+#    - Path to SSH private key (default: ~/.ssh/id_ed25519)
+#    - Hook server URL (the bot host's Tailscale IP + port 7842)
+
+# 3. After filling in the form and pressing Enter/Save:
+# Expected: machines.json updated with the new machine entry
+# Expected: SSH connection test run and reported as OK or FAIL
+# Expected: hook installed on the remote machine via SSH
+
+# 4. Restart the bot:
+./scripts/restart.sh
+
+# 5. Verify the machine appears in the Telegram machine picker when opening a new topic
+```

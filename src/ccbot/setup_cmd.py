@@ -39,8 +39,7 @@ def _get_tailscale_peers() -> list[dict]:  # type: ignore[type-arg]
     """Run tailscale status --json and return list of peer dicts (includes self with _is_self=True)."""
     try:
         result = subprocess.run(
-            ["tailscale", "status", "--json"],
-            capture_output=True, text=True, timeout=5
+            ["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5
         )
         if result.returncode != 0:
             return []
@@ -61,8 +60,7 @@ def _get_tailscale_self_hostname() -> str:
     """Return the local machine's Tailscale MagicDNS hostname (without trailing dot)."""
     try:
         result = subprocess.run(
-            ["tailscale", "status", "--json"],
-            capture_output=True, text=True, timeout=5
+            ["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5
         )
         data = json.loads(result.stdout)
         return data.get("Self", {}).get("DNSName", "").rstrip(".")
@@ -75,8 +73,9 @@ def _detect_github_url() -> str:
     try:
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
-            capture_output=True, text=True,
-            cwd=str(Path(__file__).parent.parent.parent)  # repo root
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).parent.parent.parent),  # repo root
         )
         return result.stdout.strip()
     except Exception:
@@ -95,9 +94,18 @@ def _load_existing_machines(machines_file: Path) -> dict:  # type: ignore[type-a
 def _ssh_check(user: str, host: str) -> bool:
     try:
         result = subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-             f"{user}@{host}", "echo ok"],
-            capture_output=True, text=True, timeout=10
+            [
+                "ssh",
+                "-o",
+                "ConnectTimeout=5",
+                "-o",
+                "BatchMode=yes",
+                f"{user}@{host}",
+                "echo ok",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return result.returncode == 0 and "ok" in result.stdout
     except Exception:
@@ -108,20 +116,20 @@ def _uv_install_remote(user: str, host: str, github_url: str) -> bool:
     cmd = f"uv tool install 'ccbot @ git+{github_url}' --force 2>&1"
     try:
         result = subprocess.run(
-            ["ssh", f"{user}@{host}", cmd],
-            capture_output=True, text=True, timeout=120
+            ["ssh", f"{user}@{host}", cmd], capture_output=True, text=True, timeout=120
         )
         return result.returncode == 0
     except Exception:
         return False
 
 
-def _install_hook_remote(user: str, host: str, remote_url: str, machine_id: str) -> bool:
+def _install_hook_remote(
+    user: str, host: str, remote_url: str, machine_id: str
+) -> bool:
     cmd = f"ccbot hook --install --remote {remote_url} --machine-id {machine_id}"
     try:
         result = subprocess.run(
-            ["ssh", f"{user}@{host}", cmd],
-            capture_output=True, text=True, timeout=15
+            ["ssh", f"{user}@{host}", cmd], capture_output=True, text=True, timeout=15
         )
         return result.returncode == 0
     except Exception:
@@ -132,8 +140,7 @@ def _check_endpoint_reachable(user: str, host: str, health_url: str) -> bool:
     cmd = f"curl -sf {health_url}"
     try:
         result = subprocess.run(
-            ["ssh", f"{user}@{host}", cmd],
-            capture_output=True, text=True, timeout=10
+            ["ssh", f"{user}@{host}", cmd], capture_output=True, text=True, timeout=10
         )
         return result.returncode == 0
     except Exception:
@@ -143,8 +150,7 @@ def _check_endpoint_reachable(user: str, host: str, health_url: str) -> bool:
 def _install_hook_local() -> bool:
     try:
         result = subprocess.run(
-            ["ccbot", "hook", "--install"],
-            capture_output=True, text=True, timeout=10
+            ["ccbot", "hook", "--install"], capture_output=True, text=True, timeout=10
         )
         return result.returncode == 0
     except Exception:
@@ -167,7 +173,9 @@ def setup_main(target_machine: str | None = None) -> None:
     if not github_url:
         print("Warning: could not detect GitHub URL from git remote origin")
         try:
-            github_url = prompt("GitHub repo URL (e.g. https://github.com/user/ccbot): ").strip()
+            github_url = prompt(
+                "GitHub repo URL (e.g. https://github.com/user/ccbot): "
+            ).strip()
         except (KeyboardInterrupt, EOFError):
             print("\nCancelled.")
             sys.exit(0)
@@ -224,7 +232,7 @@ def setup_main(target_machine: str | None = None) -> None:
     machines_config: dict[str, dict[str, str]] = {}
     for hostname in selected_hostnames:
         machine_id = hostname.split(".")[0]
-        is_local = (hostname == local_hostname or hostname == "localhost")
+        is_local = hostname == local_hostname or hostname == "localhost"
 
         if is_local:
             existing_cfg = existing_machines.get(machine_id, {})
@@ -253,7 +261,10 @@ def setup_main(target_machine: str | None = None) -> None:
         }
 
     # Write machines.json
-    new_config: dict[str, object] = {"hook_port": hook_port, "machines": machines_config}
+    new_config: dict[str, object] = {
+        "hook_port": hook_port,
+        "machines": machines_config,
+    }
     config_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_json(machines_file, new_config)
     print(f"\nWrote {machines_file}\n")
@@ -296,7 +307,11 @@ def setup_main(target_machine: str | None = None) -> None:
 
         if hook_url_base:
             hook_url = f"{hook_url_base}/hook"
-            print(f"[{machine_id}] Installing hook (--remote {hook_url})...", end=" ", flush=True)
+            print(
+                f"[{machine_id}] Installing hook (--remote {hook_url})...",
+                end=" ",
+                flush=True,
+            )
             if not _install_hook_remote(user, host, hook_url, machine_id):
                 r.success = False
                 r.errors.append("Hook install failed on remote")
@@ -305,7 +320,9 @@ def setup_main(target_machine: str | None = None) -> None:
                 print("✓")
 
             health_url = f"{hook_url_base}/health"
-            print(f"[{machine_id}] Verifying endpoint reachable...", end=" ", flush=True)
+            print(
+                f"[{machine_id}] Verifying endpoint reachable...", end=" ", flush=True
+            )
             if not _check_endpoint_reachable(user, host, health_url):
                 r.errors.append(f"Endpoint {health_url} not reachable from {host}")
                 print("✗ (warning only)")
@@ -326,5 +343,7 @@ def setup_main(target_machine: str | None = None) -> None:
     if all_ok:
         print("\nAll machines configured successfully!")
     else:
-        print("\nSome machines failed. Re-run with --machine <hostname> to retry individual machines.")
+        print(
+            "\nSome machines failed. Re-run with --machine <hostname> to retry individual machines."
+        )
     sys.exit(0 if all_ok else 1)

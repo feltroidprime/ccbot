@@ -1,4 +1,5 @@
 """Tests for directory browser UI builders."""
+
 from unittest.mock import MagicMock, patch
 
 from ccbot.handlers.directory_browser import (
@@ -19,7 +20,9 @@ def test_build_machine_picker_has_cancel_button():
     assert "Select Machine" in text
     flat_buttons = [b for row in keyboard.inline_keyboard for b in row]
     assert any("Cancel" in b.text for b in flat_buttons)
-    assert any("local".capitalize() in b.text or "Local" in b.text for b in flat_buttons)
+    assert any(
+        "local".capitalize() in b.text or "Local" in b.text for b in flat_buttons
+    )
 
 
 def test_build_permissions_picker_has_both_options():

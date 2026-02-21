@@ -20,11 +20,17 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "setup":
         import argparse as _ap
+
         p = _ap.ArgumentParser(prog="ccbot setup", description="Configure ccbot fleet")
-        p.add_argument("--machine", default=None, metavar="HOSTNAME",
-                       help="Target a single machine by hostname (skips TUI)")
+        p.add_argument(
+            "--machine",
+            default=None,
+            metavar="HOSTNAME",
+            help="Target a single machine by hostname (skips TUI)",
+        )
         args = p.parse_args(sys.argv[2:])
         from .setup_cmd import setup_main
+
         setup_main(target_machine=args.machine)
         return
 

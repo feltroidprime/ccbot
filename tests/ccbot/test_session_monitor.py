@@ -143,9 +143,7 @@ class TestReadNewLinesMachineAbstraction:
         mock_machine.read_file_from_offset = AsyncMock(return_value=raw_bytes)
         mock_machine.file_size = AsyncMock(return_value=len(raw_bytes))
 
-        with patch(
-            "ccbot.session_monitor.machine_registry"
-        ) as mock_registry:
+        with patch("ccbot.session_monitor.machine_registry") as mock_registry:
             mock_registry.get.return_value = mock_machine
             result = await monitor._read_new_lines(session, jsonl_file)
 

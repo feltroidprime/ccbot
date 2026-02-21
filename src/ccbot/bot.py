@@ -745,7 +745,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = update.message.text
 
     # Ignore text in machine picker mode (only for the same thread)
-    if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_MACHINE:
+    if (
+        context.user_data
+        and context.user_data.get(STATE_KEY) == STATE_SELECTING_MACHINE
+    ):
         pending_tid = context.user_data.get("_pending_thread_id")
         if pending_tid == thread_id:
             await safe_reply(
@@ -979,7 +982,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Machine picker: machine selected — transition to directory browser
     elif data.startswith(CB_MACHINE_SELECT):
-        selected_machine_id = data[len(CB_MACHINE_SELECT):]
+        selected_machine_id = data[len(CB_MACHINE_SELECT) :]
         if context.user_data is not None:
             context.user_data[BROWSE_MACHINE_KEY] = selected_machine_id
         home_path = str(Path.home())

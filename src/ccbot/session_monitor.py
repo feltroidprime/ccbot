@@ -219,8 +219,7 @@ class SessionMonitor:
             # Detect file truncation: if offset is beyond file size, reset
             if session.last_byte_offset > file_size:
                 logger.info(
-                    "File truncated for session %s "
-                    "(offset %d > size %d). Resetting.",
+                    "File truncated for session %s (offset %d > size %d). Resetting.",
                     session.session_id,
                     session.last_byte_offset,
                     file_size,
@@ -318,9 +317,9 @@ class SessionMonitor:
                 if tracked is None:
                     # For new sessions, initialize offset to end of file
                     # to avoid re-processing old messages
-                    file_size = await machine.file_size(
-                        str(session_info.file_path)
-                    ) or 0
+                    file_size = (
+                        await machine.file_size(str(session_info.file_path)) or 0
+                    )
                     tracked = TrackedSession(
                         session_id=session_info.session_id,
                         file_path=str(session_info.file_path),

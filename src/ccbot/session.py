@@ -336,9 +336,9 @@ class SessionManager:
                                 machine=binding.machine,
                                 dangerous=binding.dangerous,
                             )
-                            self.window_display_names[
-                                f"{binding.machine}:{new_id}"
-                            ] = display
+                            self.window_display_names[f"{binding.machine}:{new_id}"] = (
+                                display
+                            )
                             changed = True
                         else:
                             logger.info(
@@ -863,7 +863,9 @@ class SessionManager:
         if not window:
             return False, "Window not found (may have been closed)"
         success = await machine.send_keys(window.window_id, text)
-        return (True, f"Sent to {display}") if success else (False, "Failed to send keys")
+        return (
+            (True, f"Sent to {display}") if success else (False, "Failed to send keys")
+        )
 
     # --- Message history ---
 

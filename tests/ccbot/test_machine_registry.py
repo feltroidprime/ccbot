@@ -69,6 +69,7 @@ def test_registry_get_unknown_falls_back_to_local(registry_json):
     m = reg.get("nonexistent")
     assert m.machine_id == "macbook"  # local machine
 
+
 def test_registry_skips_remote_with_missing_host(tmp_path):
     data = {
         "machines": {
