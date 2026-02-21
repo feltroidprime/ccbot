@@ -3,8 +3,12 @@ set -euo pipefail
 
 # Deploy ccbot: push → upgrade all machines → restart bot
 # Usage: ./scripts/deploy.sh
+#
+# First run: creates ~/.ccbot/deploy.conf with bot host.
+# All machine info comes from `tailscale status` at runtime.
+# No Tailscale hostnames are stored in the repo.
 
-MACHINES_JSON="$HOME/.ccbot/machines.json"
+DEPLOY_CONF="$HOME/.ccbot/deploy.conf"
 REMOTE="fork"
 BRANCH="main"
 TMUX_SESSION="ccbot"
@@ -19,6 +23,64 @@ ssh_cmd() {
     ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$@"
 }
 
+# --- Discover machines from Tailscale ---
+get_tailscale_machines() {
+    # Returns lines of: hostname ip is_self
+    python3 -c "
+import json, subprocess, sys
+r = subprocess.run(['tailscale', 'status', '--json'], capture_output=True, text=True)
+if r.returncode != 0:
+    sys.exit(1)
+data = json.loads(r.stdout)
+self_node = data.get('Self', {})
+if self_node:
+    name = self_node.get('DNSName', '').rstrip('.')
+    ip = self_node.get('TailscaleIPs', [''])[0]
+    if name: print(f'{name} {ip} self')
+for peer in data.get('Peer', {}).values():
+    if not peer.get('Online', False):
+        continue
+    name = peer.get('DNSName', '').rstrip('.')
+    ip = peer.get('TailscaleIPs', [''])[0]
+    if name: print(f'{name} {ip} peer')
+" 2>/dev/null
+}
+
+# --- First-run setup ---
+if [ ! -f "$DEPLOY_CONF" ]; then
+    bold "==> First-time deploy setup"
+    echo "    Scanning Tailscale network..."
+
+    machines=()
+    while IFS=' ' read -r hostname ip role; do
+        machines+=("$hostname")
+        echo "    ${#machines[@]}) $hostname $([ "$role" = "self" ] && echo "(this machine)" || echo "")"
+    done < <(get_tailscale_machines)
+
+    if [ ${#machines[@]} -eq 0 ]; then
+        red "    No Tailscale peers found. Is Tailscale running?"
+        exit 1
+    fi
+
+    echo ""
+    read -rp "    Which machine runs the bot? [1-${#machines[@]}]: " choice
+    bot_host="${machines[$((choice - 1))]}"
+
+    read -rp "    SSH user for remote machines [$(whoami)]: " ssh_user
+    ssh_user="${ssh_user:-$(whoami)}"
+
+    mkdir -p "$(dirname "$DEPLOY_CONF")"
+    cat > "$DEPLOY_CONF" <<CONF
+BOT_HOST=$bot_host
+SSH_USER=$ssh_user
+CONF
+    green "    Saved to $DEPLOY_CONF"
+    echo ""
+fi
+
+# shellcheck source=/dev/null
+source "$DEPLOY_CONF"
+
 # --- Step 1: Push ---
 bold "==> Pushing to ${REMOTE}/${BRANCH}"
 git push "$REMOTE" "$BRANCH"
@@ -27,79 +89,56 @@ green "    Pushed."
 # --- Step 2: Upgrade all machines ---
 bold "==> Upgrading ccbot on all machines"
 
+# Get self hostname
+self_host=""
+while IFS=' ' read -r hostname ip role; do
+    if [ "$role" = "self" ]; then
+        self_host="$hostname"
+    fi
+done < <(get_tailscale_machines)
+
 # Upgrade local
-printf "    %-15s " "local"
+printf "    %-20s " "${self_host:-local}"
 if uv tool upgrade ccbot >/dev/null 2>&1; then
     green "✓"
 else
     red "✗"
 fi
 
-# Upgrade remotes from machines.json
-if [ -f "$MACHINES_JSON" ]; then
-    eval "$(python3 -c "
-import json
-data = json.load(open('$MACHINES_JSON'))
-for mid, cfg in data.get('machines', {}).items():
-    if 'host' in cfg:
-        print(f'DEPLOY_MACHINES+=(\"{mid}\")')
-        print(f'DEPLOY_HOST_{mid}=\"{cfg[\"host\"]}\"')
-        print(f'DEPLOY_USER_{mid}=\"{cfg[\"user\"]}\"')
-")"
-    for machine_id in "${DEPLOY_MACHINES[@]:-}"; do
-        host_var="DEPLOY_HOST_${machine_id}"
-        user_var="DEPLOY_USER_${machine_id}"
-        host="${!host_var}"
-        user="${!user_var}"
-        printf "    %-15s " "$machine_id"
-        if ssh_cmd "${user}@${host}" "bash -lc 'uv tool upgrade ccbot'" >/dev/null 2>&1; then
-            green "✓"
-        else
-            red "✗"
-        fi
-    done
-fi
+# Upgrade all online peers
+while IFS=' ' read -r hostname ip role; do
+    [ "$role" = "self" ] && continue
+    printf "    %-20s " "$hostname"
+    if ssh_cmd "${SSH_USER}@${hostname}" "bash -lc 'uv tool upgrade ccbot'" >/dev/null 2>&1; then
+        green "✓"
+    else
+        red "✗"
+    fi
+done < <(get_tailscale_machines)
 
 # --- Step 3: Restart bot ---
 bold "==> Restarting bot"
 
-restart_bot() {
-    local target="$1"
-    local via="$2"  # "local" or "ssh user@host"
-
-    if [ "$via" = "local" ]; then
-        tmux send-keys -t "${TMUX_SESSION}:${TMUX_WINDOW}" C-c 2>/dev/null || true
-        sleep 2
-        tmux send-keys -t "${TMUX_SESSION}:${TMUX_WINDOW}" "ccbot" Enter
-    else
-        $via "tmux send-keys -t ${TMUX_SESSION}:${TMUX_WINDOW} C-c 2>/dev/null; sleep 2; tmux send-keys -t ${TMUX_SESSION}:${TMUX_WINDOW} 'ccbot' Enter"
-    fi
+restart_local() {
+    tmux send-keys -t "${TMUX_SESSION}:${TMUX_WINDOW}" C-c 2>/dev/null || true
+    sleep 2
+    tmux send-keys -t "${TMUX_SESSION}:${TMUX_WINDOW}" "ccbot" Enter
     sleep 3
-    green "    Bot restarted on ${target}."
+    green "    Bot restarted locally."
 }
 
-# Check if bot is running locally (has ccbot tmux session WITH __main__ window)
-if tmux list-windows -t "$TMUX_SESSION" -F '#{window_name}' 2>/dev/null | grep -qx "$TMUX_WINDOW"; then
-    echo "    Bot is local, restarting..."
-    restart_bot "local" "local"
-    exit 0
-fi
+restart_remote() {
+    local host="$1"
+    ssh_cmd "${SSH_USER}@${host}" \
+        "tmux send-keys -t ${TMUX_SESSION}:${TMUX_WINDOW} C-c 2>/dev/null; sleep 2; tmux send-keys -t ${TMUX_SESSION}:${TMUX_WINDOW} 'ccbot' Enter"
+    sleep 3
+    green "    Bot restarted on ${host}."
+}
 
-# Check remotes
-if [ -f "$MACHINES_JSON" ]; then
-    for machine_id in "${DEPLOY_MACHINES[@]:-}"; do
-        host_var="DEPLOY_HOST_${machine_id}"
-        user_var="DEPLOY_USER_${machine_id}"
-        host="${!host_var}"
-        user="${!user_var}"
-        if ssh_cmd "${user}@${host}" \
-            "tmux list-windows -t $TMUX_SESSION -F '#{window_name}' 2>/dev/null | grep -qx $TMUX_WINDOW" 2>/dev/null; then
-            echo "    Bot is on ${machine_id}, restarting..."
-            restart_bot "$machine_id" "ssh_cmd ${user}@${host}"
-            exit 0
-        fi
-    done
+if [ "$BOT_HOST" = "$self_host" ]; then
+    echo "    Bot is local ($BOT_HOST)"
+    restart_local
+else
+    echo "    Bot is on $BOT_HOST"
+    restart_remote "$BOT_HOST"
 fi
-
-red "    Could not find running bot on any machine."
-exit 1
